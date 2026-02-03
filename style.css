@@ -1,0 +1,29 @@
+body {
+  font-family: Arial, sans-serif;
+  text-align: center;
+  padding: 1rem;
+  background: #f7f7f7;
+}
+
+h1 {
+  font-size: 1.4rem;
+}
+
+#tapNotice {
+  font-size: 1rem;
+  color: #444;
+  margin-bottom: 0.5rem;
+}
+
+video {
+  width: 100%;
+  max-width: 420px;
+  border-radius: 12px;
+  background: black;
+  margin-top: 0.5rem;
+}
+
+#status {
+  margin-top: 1rem;
+  font-size: 1.1rem;
+}

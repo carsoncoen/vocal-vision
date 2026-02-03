@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Accessible Object Detection</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <h1>Object Detection Assistant</h1>
+
+  <p id="tapNotice">
+    Tap anywhere once to enable speech.
+  </p>
+
+  <video
+    id="video"
+    autoplay
+    playsinline
+    muted
+    aria-label="Live camera feed"
+  ></video>
+
+  <p id="status" aria-live="polite">
+    Waiting for user interaction...
+  </p>
+
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <!-- COCO-SSD -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+
+  <script src="app.js"></script>
+
+</body>
+</html>

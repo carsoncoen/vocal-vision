@@ -48,7 +48,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
   bool _isSpeaking = false;
 
   // REPLACE WITH YOUR COMPUTER IP
-  final String _socketUrl = 'ws://127.0.0.1:8765'; 
+  final String _socketUrl = 'ws://10.245.225.79:8765'; 
 
   @override
   void initState() {
@@ -176,22 +176,37 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
 
       // Handle iOS/Simulator BGRA8888 format
       if (cameraImage.format.group == ImageFormatGroup.bgra8888) {
+        final int width = cameraImage.width;
+        final int height = cameraImage.height;
+        const int bytesPerPixel = 4;
+        final int srcStride = cameraImage.planes[0].bytesPerRow;
+        final Uint8List srcBytes = cameraImage.planes[0].bytes;
+
+        // Copy only the used portion of each row into a tightly packed buffer
+        final Uint8List dstBytes = Uint8List(width * height * bytesPerPixel);
+        int dstOffset = 0;
+        for (int y = 0; y < height; y++) {
+          final int srcRowStart = y * srcStride;
+          dstBytes.setRange(
+            dstOffset,
+            dstOffset + width * bytesPerPixel,
+            srcBytes.sublist(srcRowStart, srcRowStart + width * bytesPerPixel),
+          );
+          dstOffset += width * bytesPerPixel;
+        }
+
         image = img.Image.fromBytes(
-          width: cameraImage.width,
-          height: cameraImage.height,
-          bytes: cameraImage.planes[0].bytes.buffer,
+          width: width,
+          height: height,
+          bytes: dstBytes.buffer,
           order: img.ChannelOrder.bgra,
         );
       } 
-      // Handle Android YUV420 (just in case)
+      // Handle Android YUV420 format
       else if (cameraImage.format.group == ImageFormatGroup.yuv420) {
-        // Simple conversion if needed, but for iOS Simulator this block is skipped
-        image = img.Image.fromBytes(
-            width: cameraImage.width,
-            height: cameraImage.height,
-            bytes: cameraImage.planes[0].bytes.buffer,
-            // YUV conversion is complex, this is a placeholder
-        ); 
+        image = _convertYUV420ToImage(cameraImage);
+      } else {
+        print("Image format not supported: ${cameraImage.format.group}");
       }
 
       if (image != null) {
@@ -214,6 +229,51 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
     }
   }
 
+  // Convert Android YUV420_888 camera image to RGB image
+  img.Image _convertYUV420ToImage(CameraImage cameraImage) {
+    final int width = cameraImage.width;
+    final int height = cameraImage.height;
+
+    final img.Image imgImage = img.Image(width: width, height: height);
+
+    final Plane planeY = cameraImage.planes[0];
+    final Plane planeU = cameraImage.planes[1];
+    final Plane planeV = cameraImage.planes[2];
+
+    final int uvRowStride = planeU.bytesPerRow;
+    final int uvPixelStride = planeU.bytesPerPixel ?? 1;
+
+    for (int y = 0; y < height; y++) {
+      final int uvRow = uvRowStride * (y ~/ 2);
+      final int rowY = planeY.bytesPerRow * y;
+
+      for (int x = 0; x < width; x++) {
+        final int uvIndex = uvRow + (x ~/ 2) * uvPixelStride;
+        final int indexY = rowY + x;
+
+        final int yVal = planeY.bytes[indexY];
+        final int uVal = planeU.bytes[uvIndex];
+        final int vVal = planeV.bytes[uvIndex];
+
+        final double yf = yVal.toDouble();
+        final double uf = uVal.toDouble() - 128.0;
+        final double vf = vVal.toDouble() - 128.0;
+
+        int r = (yf + 1.402 * vf).round();
+        int g = (yf - 0.344136 * uf - 0.714136 * vf).round();
+        int b = (yf + 1.772 * uf).round();
+
+        r = r.clamp(0, 255);
+        g = g.clamp(0, 255);
+        b = b.clamp(0, 255);
+
+        imgImage.setPixelRgba(x, y, r, g, b, 255);
+      }
+    }
+
+    return imgImage;
+  }
+
   @override
   void dispose() {
     _controller?.dispose();
@@ -228,7 +288,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text("YOLOv8 JSON Mode")),
+      appBar: AppBar(title: const Text("YOLO26n JSON Mode")),
       body: Stack(
         children: [
           // 1. Camera Feed

@@ -4,13 +4,12 @@ A new Flutter project.
 
 ## Getting Started
 
-This project is a starting point for a Flutter application.
+### Installing iOS and Android dependencies
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- YOLO
+    - ultralytics_yolo: ^0.1.25
+    - image_picker: ^0.8.7
+    - Dowloading and adding yolo26n file (https://github.com/ultralytics/yolo-flutter-app/releases/tag/v0.2.0):
+        - For iOS: Drag and drop mlpackage/mlmodel directly into ios/Runner.xcworkspace and set target to Runner.
+        - For Android: Place the yolo11n.tflite file in android/app/src/main/assets/ (the Android native assets folder, not the Flutter assets folder).
+    - For more info about using YOLO in Flutter, visit https://github.com/ultralytics/yolo-flutter-app/tree/main

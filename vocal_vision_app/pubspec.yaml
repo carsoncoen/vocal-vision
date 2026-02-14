@@ -36,9 +36,9 @@ dependencies:
   cupertino_icons: ^1.0.8
   camera: ^0.11.3+1
   flutter_vision: ^2.0.0
-  web_socket_channel: ^3.0.3
-  image: ^4.7.2
   flutter_tts: ^3.8.3
+  ultralytics_yolo: ^0.2.0
+  image_picker: ^0.8.7
 
 dev_dependencies:
   flutter_test:
@@ -62,8 +62,6 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  assets:
-    - assets/models/yolov8n_float32.tflite
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

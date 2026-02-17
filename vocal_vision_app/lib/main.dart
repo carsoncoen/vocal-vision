@@ -7,7 +7,6 @@ void main() {
   runApp(const YOLODemo());
 }
 
-/// App wrapper (MaterialApp setup).
 class YOLODemo extends StatelessWidget {
   const YOLODemo({super.key});
 
@@ -20,26 +19,30 @@ class YOLODemo extends StatelessWidget {
   }
 }
 
-/// Real-time camera detection screen:
-/// - YOLOView runs on-device inference on live camera frames
-/// - TTS speaks a summary of what was detected
 class ObjectDetectionScreen extends StatefulWidget {
   const ObjectDetectionScreen({super.key});
 
   @override
-  State<ObjectDetectionScreen> createState() => _ObjectDetectionScreenState();
+  State<ObjectDetectionScreen> createState() =>
+      _ObjectDetectionScreenState();
 }
 
-class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
-  // Text-to-speech engine.
+class _ObjectDetectionScreenState
+    extends State<ObjectDetectionScreen> {
+
   final FlutterTts _tts = FlutterTts();
 
-  // Track whether TTS is currently speaking (prevents overlap).
   bool _isSpeaking = false;
+  bool _detectionEnabled = true;
 
-  // Throttle speech so it doesn’t speak on every single frame.
-  DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _minSpeakInterval = Duration(seconds: 4);
+  DateTime _lastSpoken =
+      DateTime.fromMillisecondsSinceEpoch(0);
+
+  static const Duration _minSpeakInterval =
+      Duration(seconds: 4);
+
+  static const double _personConfidence = 0.55;
+  static const double _otherConfidence = 0.75;
 
   @override
   void initState() {
@@ -47,7 +50,6 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
     _initTts();
   }
 
-  /// Configure TTS settings + handlers to update speaking state.
   Future<void> _initTts() async {
     await _tts.setLanguage('en-US');
     await _tts.setSpeechRate(0.5);
@@ -70,57 +72,161 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
 
   @override
   void dispose() {
-    // Ensure speech stops if the widget is removed.
     _tts.stop();
     super.dispose();
   }
 
-  /// Called continuously with the latest detections from YOLOView.
-  /// Builds a short phrase like "2 people 1 bottle" and speaks it.
-  Future<void> _speakDetections(List<YOLOResult> detections) async {
-    if (_isSpeaking || detections.isEmpty) return;
+  Future<void> _toggleDetection() async {
 
-    final DateTime now = DateTime.now();
-    if (now.difference(_lastSpoken) < _minSpeakInterval) return;
+  // Stop anything currently speaking
+  await _tts.stop();
 
-    // Count detections by label (e.g., person -> 2, bottle -> 1).
-    final Map<String, int> counts = <String, int>{};
-    for (final YOLOResult d in detections) {
-      final String label = d.className.trim().toLowerCase();
+  // Reset speaking state manually
+  setState(() {
+    _isSpeaking = false;
+    _detectionEnabled = !_detectionEnabled;
+  });
+
+  // Small delay to allow TTS engine to stabilize
+  await Future.delayed(const Duration(milliseconds: 250));
+
+  if (_detectionEnabled) {
+    await _tts.speak('Detection on');
+  } else {
+    await _tts.speak('Detection off');
+  }
+}
+
+
+  Future<void> _speakDetections(
+      List<YOLOResult> detections) async {
+
+    if (!_detectionEnabled) return;
+    if (_isSpeaking) return;
+    if (detections.isEmpty) return;
+
+
+    final now = DateTime.now();
+    if (now.difference(_lastSpoken) <
+        _minSpeakInterval) return;
+
+    final Map<String, int> counts = {};
+
+    for (final d in detections) {
+      final label =
+          d.className.trim().toLowerCase();
+      final confidence = d.confidence;
+
       if (label.isEmpty) continue;
+
+      if (label == 'person') {
+        if (confidence < _personConfidence) continue;
+      } else {
+        if (confidence < _otherConfidence) continue;
+      }
+
       counts[label] = (counts[label] ?? 0) + 1;
     }
 
     if (counts.isEmpty) return;
 
-    // Convert counts into a list of speakable fragments.
-    final List<String> parts = <String>[];
-    counts.forEach((String label, int count) {
-      if (count == 1) {
-        parts.add('1 $label');
-      } else if (label == 'person') {
-        parts.add('$count people');
-      } else {
-        parts.add('$count ${label}s');
-      }
+    final List<String> parts = [];
+
+    if (counts.containsKey('person')) {
+      final count = counts['person']!;
+      parts.add(count == 1
+          ? '1 person ahead'
+          : '$count people ahead');
+    }
+
+    counts.forEach((label, count) {
+      if (label == 'person') return;
+      parts.add(count == 1
+          ? '1 $label'
+          : '$count ${label}s');
     });
 
     _lastSpoken = now;
-    await _tts.speak(parts.join(' '));
+    await _tts.speak(parts.join(', '));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Object Detection')),
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
 
-      // YOLOView opens the camera, runs the YOLO model on-device,
-      // and emits detections through onResult.
-      body: YOLOView(
-        modelPath: 'yolo11n',
-        task: YOLOTask.detect,
-        useGpu: false, // force CPU so the model loads on emulator
-        onResult: _speakDetections,
+          // Camera or paused screen
+          _detectionEnabled
+              ? YOLOView(
+                  modelPath: 'yolo11n',
+                  task: YOLOTask.detect,
+                  useGpu: false,
+                  onResult: _speakDetections,
+                )
+              : const Center(
+                  child: Text(
+                    'Detection Paused',
+                    style: TextStyle(
+                      fontSize: 24,
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+
+          // Top status text
+          Positioned(
+            top: 60,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Text(
+                _detectionEnabled
+                    ? 'Detection Active'
+                    : 'Detection Off',
+                style: const TextStyle(
+                  fontSize: 20,
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+
+          // Single large control button
+          Positioned(
+            bottom: 80,
+            left: 40,
+            right: 40,
+            child: SizedBox(
+              height: 70,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor:
+                      _detectionEnabled
+                          ? Colors.orange
+                          : Colors.green,
+                  shape: RoundedRectangleBorder(
+                    borderRadius:
+                        BorderRadius.circular(18),
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                onPressed: _toggleDetection,
+                child: Text(
+                  _detectionEnabled
+                      ? 'Pause Detection'
+                      : 'Resume Detection',
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

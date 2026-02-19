@@ -22,6 +22,8 @@ class _YOLODemoState extends State<YOLODemo> {
   bool isSpeaking = false;
   DateTime lastSpoken = DateTime.now();
 
+  List<String> onGroundObjects = ['person', 'table', 'chair', 'dog', 'cat', 'bicycle', 'suitcase', 'couch', 'bed', 'toilet', 'refrigerator', 'bus'];
+
   @override
   void initState() {
     super.initState();
@@ -90,6 +92,9 @@ class _YOLODemoState extends State<YOLODemo> {
     Map<String, int> objectCounts = {};
     for (var object in detections) {
       String label = object.className.toLowerCase();
+      if (label == 'dining table') {
+        label = 'table';
+      }
       objectCounts[label] = (objectCounts[label] ?? 0) + 1;
     }
 
@@ -98,16 +103,18 @@ class _YOLODemoState extends State<YOLODemo> {
       
       // Format the output based on the count
       objectCounts.forEach((label, count) {
-        if (count > 1) {
-          // Manual pluralization
-          if (label == 'person') {
-            spokenItems.add('$count people');
+        if (onGroundObjects.contains(label)) {
+          if (count > 1) {
+            // Manual pluralization
+            if (label == 'person') {
+              spokenItems.add('$count people');
+            } else {
+              spokenItems.add('$count ${label}s');
+            }
           } else {
-            spokenItems.add('$count ${label}s');
+            // Singular
+            spokenItems.add('$count $label');
           }
-        } else {
-          // Singular
-          spokenItems.add('$count $label');
         }
       });
 

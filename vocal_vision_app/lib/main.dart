@@ -49,6 +49,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
   bool _isSpeaking = false;
   bool _detectionEnabled = true;
   bool _ttsReady = false;
+  bool _toggleSpeaking = false; // 🔥 critical fix
 
   DateTime _lastSpoken =
       DateTime.fromMillisecondsSinceEpoch(0);
@@ -104,31 +105,37 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
 
   Future<void> _toggleDetection() async {
 
-  // Disable detection immediately
-  setState(() {
-    _detectionEnabled = !_detectionEnabled;
-  });
+    _toggleSpeaking = true;
 
-  // Hard stop any speech
-  await _tts.stop();
-  _isSpeaking = false;
+    await _tts.stop();
+    _isSpeaking = false;
 
-  // Small stabilization delay
-  await Future.delayed(const Duration(milliseconds: 200));
+    final turningOn = !_detectionEnabled;
 
-  // Speak toggle message FIRST
-  await _tts.speak(
-      _detectionEnabled ? "Detection on" : "Detection off");
+    setState(() {
+      _detectionEnabled = turningOn;
+    });
 
-  // Reset last spoken so detection doesn't instantly fire
-  _lastSpoken =
-      DateTime.fromMillisecondsSinceEpoch(0);
-}
+    await Future.delayed(const Duration(milliseconds: 150));
 
+    if (_ttsReady) {
+      await _tts.speak(
+          turningOn ? "Detection on" : "Detection off");
+    }
+
+    // prevent immediate YOLO speech stealing mic
+    await Future.delayed(const Duration(milliseconds: 400));
+
+    _lastSpoken =
+        DateTime.fromMillisecondsSinceEpoch(0);
+
+    _toggleSpeaking = false;
+  }
 
   Future<void> _speakDetections(
       List<YOLOResult> detections) async {
 
+    if (_toggleSpeaking) return;
     if (!_detectionEnabled) return;
     if (!_ttsReady) return;
     if (_isSpeaking) return;
@@ -250,7 +257,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
       body: Stack(
         children: [
 
-          // ALWAYS mounted — camera never rebuilds
+          // YOLO always mounted
           YOLOView(
             modelPath: 'yolo11n',
             task: YOLOTask.detect,
@@ -258,7 +265,6 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
             onResult: _speakDetections,
           ),
 
-          // Overlay when paused (camera still running)
           if (!_detectionEnabled)
             Container(
               color: Colors.black.withOpacity(0.6),
@@ -274,7 +280,6 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
               ),
             ),
 
-          // Status text
           Positioned(
             top: 60,
             left: 0,
@@ -293,7 +298,6 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
             ),
           ),
 
-          // Toggle button
           Positioned(
             bottom: 80,
             left: 40,

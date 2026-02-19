@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:ultralytics_yolo/yolo.dart';
@@ -27,9 +29,21 @@ class ObjectDetectionScreen extends StatefulWidget {
       _ObjectDetectionScreenState();
 }
 
-class _ObjectDetectionScreenState
-    extends State<ObjectDetectionScreen> {
+class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
+  // Approximate real-world heights (in meters) for distance estimation.
+  static const Map<String, double> _averageHeightsM = <String, double>{
+    'person': 1.7,
+    'bottle': 0.25,
+    'dining table': 0.75,
+    'tv': 0.6,
+    'keyboard': 0.04,
+    'laptop': 0.02,
+  };
 
+  // Assumed vertical field-of-view of the device camera (in degrees).
+  static const double _cameraVerticalFovDeg = 60.0;
+
+  // Text-to-speech engine.
   final FlutterTts _tts = FlutterTts();
 
   bool _isSpeaking = false;
@@ -44,6 +58,14 @@ class _ObjectDetectionScreenState
 
   static const double _personConfidence = 0.55;
   static const double _otherConfidence = 0.75;
+  // Last description spoken / to display on screen.
+  String _statusText = 'Scanning for objects...';
+
+  // Throttle speech so it doesn’t speak on every single frame.
+  DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
+  static const Duration _minSpeakInterval = Duration(seconds: 4);
+
+  List<String> onGroundObjects = ['person', 'table', 'chair', 'dog', 'cat', 'bicycle', 'suitcase', 'couch', 'bed', 'toilet', 'refrigerator', 'bus'];
 
   @override
   void initState() {
@@ -115,6 +137,31 @@ class _ObjectDetectionScreenState
     final now = DateTime.now();
     if (now.difference(_lastSpoken) <
         _minSpeakInterval) return;
+  /// Estimate distance to an object using its normalized bounding-box height.
+  ///
+  /// Uses a simple pinhole-camera model:
+  /// distance ≈ H_real / (2 * h_norm * tan(FOV/2))
+  /// where h_norm is the fraction of the image height covered by the box.
+  double? _estimateDistanceMeters(YOLOResult detection) {
+    final String label = detection.className.trim().toLowerCase();
+    final double? realHeightM = _averageHeightsM[label];
+    if (realHeightM == null) return null;
+
+    final double boxHeightNorm = detection.normalizedBox.height;
+    if (boxHeightNorm <= 0) return null;
+
+    final double fovRad = _cameraVerticalFovDeg * math.pi / 180.0;
+    final double distance =
+        realHeightM / (2.0 * boxHeightNorm * math.tan(fovRad / 2.0));
+
+    if (!distance.isFinite || distance <= 0) return null;
+    return distance;
+  }
+
+  /// Called continuously with the latest detections from YOLOView.
+  /// Builds a short phrase like "2 people 1 bottle" and speaks it.
+  Future<void> _speakDetections(List<YOLOResult> detections) async {
+    if (_isSpeaking || detections.isEmpty) return;
 
     final Map<String, int> counts = {};
 
@@ -132,33 +179,68 @@ class _ObjectDetectionScreenState
         if (confidence < _otherConfidence) continue;
       }
 
+    // Count detections by label (e.g., person -> 2, bottle -> 1)
+    // and accumulate distance estimates for each label.
+    final Map<String, int> counts = <String, int>{};
+    final Map<String, List<double>> distancesByLabel =
+        <String, List<double>>{};
+    for (final YOLOResult d in detections) {
+      String label = d.className.trim().toLowerCase();
+      if (label.isEmpty) continue;
+      if (label == 'dining table') {
+        label = 'table';
+      }
       counts[label] = (counts[label] ?? 0) + 1;
+
+      final double? distance = _estimateDistanceMeters(d);
+      if (distance != null) {
+        (distancesByLabel[label] ??= <double>[]).add(distance);
+      }
     }
 
     if (counts.isEmpty) return;
 
-    final List<String> parts = [];
+    // Convert counts + distance estimates into speakable fragments.
+    final List<String> parts = <String>[];
+    counts.forEach((String label, int count) {
+      // Handle basic pluralization.
+      if (onGroundObjects.contains(label)) {
+        final String spokenLabel;
+        if (count == 1) {
+          spokenLabel = label;
+        } else if (label == 'person') {
+          spokenLabel = 'people';
+        } else {
+          spokenLabel = '${label}s';
+        }
+        
 
-    if (counts.containsKey('person')) {
-      final count = counts['person']!;
-      parts.add(count == 1
-          ? '1 person ahead'
-          : '$count people ahead');
-    }
+        String phrase = '$count $spokenLabel';
 
-    counts.forEach((label, count) {
-      if (label == 'person') return;
-      parts.add(count == 1
-          ? '1 $label'
-          : '$count ${label}s');
+        // Attach a rough distance estimate if we have one.
+        final List<double>? dists = distancesByLabel[label];
+        if (dists != null && dists.isNotEmpty) {
+          final double minDist = dists.reduce(math.min);
+          // Round to the nearest 0.5 meters for more natural speech.
+          final double rounded =
+              (minDist * 2.0).round().toDouble() / 2.0;
+          phrase += ' around ${rounded.toStringAsFixed(1)} meters away';
+        }
+
+        parts.add(phrase);
+      }
     });
 
-    final speech = parts.join(', ');
+    final String sentence = parts.join(', ');
+
+    if (mounted) {
+      setState(() {
+        _statusText = 'Detected: $sentence';
+      });
+    }
 
     _lastSpoken = now;
-    _isSpeaking = true;
-
-    await _tts.speak(speech);
+    await _tts.speak(sentence);
   }
 
   @override

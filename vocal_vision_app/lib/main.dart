@@ -34,6 +34,7 @@ class _ObjectDetectionScreenState
 
   bool _isSpeaking = false;
   bool _detectionEnabled = true;
+  bool _ttsReady = false;
 
   DateTime _lastSpoken =
       DateTime.fromMillisecondsSinceEpoch(0);
@@ -53,21 +54,24 @@ class _ObjectDetectionScreenState
   Future<void> _initTts() async {
     await _tts.setLanguage('en-US');
     await _tts.setSpeechRate(0.5);
+    await _tts.awaitSpeakCompletion(true);
 
     _tts.setStartHandler(() {
       if (!mounted) return;
-      setState(() => _isSpeaking = true);
+      _isSpeaking = true;
     });
 
     _tts.setCompletionHandler(() {
       if (!mounted) return;
-      setState(() => _isSpeaking = false);
+      _isSpeaking = false;
     });
 
     _tts.setErrorHandler((_) {
       if (!mounted) return;
-      setState(() => _isSpeaking = false);
+      _isSpeaking = false;
     });
+
+    _ttsReady = true;
   }
 
   @override
@@ -78,23 +82,25 @@ class _ObjectDetectionScreenState
 
   Future<void> _toggleDetection() async {
 
-  // Stop anything currently speaking
-  await _tts.stop();
-
-  // Reset speaking state manually
+  // Disable detection immediately
   setState(() {
-    _isSpeaking = false;
     _detectionEnabled = !_detectionEnabled;
   });
 
-  // Small delay to allow TTS engine to stabilize
-  await Future.delayed(const Duration(milliseconds: 250));
+  // Hard stop any speech
+  await _tts.stop();
+  _isSpeaking = false;
 
-  if (_detectionEnabled) {
-    await _tts.speak('Detection on');
-  } else {
-    await _tts.speak('Detection off');
-  }
+  // Small stabilization delay
+  await Future.delayed(const Duration(milliseconds: 200));
+
+  // Speak toggle message FIRST
+  await _tts.speak(
+      _detectionEnabled ? "Detection on" : "Detection off");
+
+  // Reset last spoken so detection doesn't instantly fire
+  _lastSpoken =
+      DateTime.fromMillisecondsSinceEpoch(0);
 }
 
 
@@ -102,9 +108,9 @@ class _ObjectDetectionScreenState
       List<YOLOResult> detections) async {
 
     if (!_detectionEnabled) return;
+    if (!_ttsReady) return;
     if (_isSpeaking) return;
     if (detections.isEmpty) return;
-
 
     final now = DateTime.now();
     if (now.difference(_lastSpoken) <
@@ -113,6 +119,7 @@ class _ObjectDetectionScreenState
     final Map<String, int> counts = {};
 
     for (final d in detections) {
+
       final label =
           d.className.trim().toLowerCase();
       final confidence = d.confidence;
@@ -146,8 +153,12 @@ class _ObjectDetectionScreenState
           : '$count ${label}s');
     });
 
+    final speech = parts.join(', ');
+
     _lastSpoken = now;
-    await _tts.speak(parts.join(', '));
+    _isSpeaking = true;
+
+    await _tts.speak(speech);
   }
 
   @override
@@ -157,26 +168,31 @@ class _ObjectDetectionScreenState
       body: Stack(
         children: [
 
-          // Camera or paused screen
-          _detectionEnabled
-              ? YOLOView(
-                  modelPath: 'yolo11n',
-                  task: YOLOTask.detect,
-                  useGpu: false,
-                  onResult: _speakDetections,
-                )
-              : const Center(
-                  child: Text(
-                    'Detection Paused',
-                    style: TextStyle(
-                      fontSize: 24,
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
+          // ALWAYS mounted — camera never rebuilds
+          YOLOView(
+            modelPath: 'yolo11n',
+            task: YOLOTask.detect,
+            useGpu: false,
+            onResult: _speakDetections,
+          ),
+
+          // Overlay when paused (camera still running)
+          if (!_detectionEnabled)
+            Container(
+              color: Colors.black.withOpacity(0.6),
+              child: const Center(
+                child: Text(
+                  'Detection Paused',
+                  style: TextStyle(
+                    fontSize: 24,
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
+              ),
+            ),
 
-          // Top status text
+          // Status text
           Positioned(
             top: 60,
             left: 0,
@@ -195,7 +211,7 @@ class _ObjectDetectionScreenState
             ),
           ),
 
-          // Single large control button
+          // Toggle button
           Positioned(
             bottom: 80,
             left: 40,

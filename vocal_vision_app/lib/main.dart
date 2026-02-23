@@ -1,18 +1,21 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:ultralytics_yolo/yolo.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 
-void main() {
-  runApp(const YOLODemo());
-}
+// Main entry point
+void main() => runApp(const YOLODemo());
 
-class YOLODemo extends StatelessWidget {
+// Main widget
+class YOLODemo extends StatelessWidget
+{
   const YOLODemo({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context)
+  {
     return const MaterialApp(
       debugShowCheckedModeBanner: false,
       home: ObjectDetectionScreen(),
@@ -20,16 +23,51 @@ class YOLODemo extends StatelessWidget {
   }
 }
 
-class ObjectDetectionScreen extends StatefulWidget {
+// Object detection screen
+class ObjectDetectionScreen extends StatefulWidget
+{
   const ObjectDetectionScreen({super.key});
 
   @override
-  State<ObjectDetectionScreen> createState() =>
-      _ObjectDetectionScreenState();
+  State<ObjectDetectionScreen> createState() => _ObjectDetectionScreenState();
 }
 
-class _ObjectDetectionScreenState
-    extends State<ObjectDetectionScreen> {
+// Object detection screen state
+class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
+{
+  // ---------------------------
+  // "In-path" filtering
+  // Center corridor: only announce objects roughly "ahead" of the user.
+  static const double _pathCorridorLeftX = 0.30;
+  static const double _pathCorridorRightX = 0.70;
+
+  // Require the bottom of the box to be low enough in the frame.
+  // (Simple proxy for "likely near/on the floor plane".)
+  static const double _minBoxBottomY = 0.55;
+
+  // If we can estimate distance, ignore objects beyond this range.
+  static const double _maxAlertDistanceMeters = 4.0;
+
+  // If we cannot estimate distance (unknown real height), require a minimum box height
+  // to consider it close enough to announce.
+  static const double _minBoxHeightForUnknownDistance = 0.35;
+
+  // Returns true if a detection is plausibly "in the user's path" based on box geometry.
+  bool _isInPath(YOLOResult d)
+  {
+    final Rect b = d.normalizedBox;
+
+    // Rect uses left/top, not x/y
+    final double centerX = b.left + (b.width / 2.0);
+    final double bottomY = b.top + b.height; // same as b.bottom
+
+    final bool withinCenterCorridor = (centerX >= _pathCorridorLeftX && centerX <= _pathCorridorRightX);
+
+    final bool bottomIsLowEnough = (bottomY >= _minBoxBottomY);
+
+    return withinCenterCorridor && bottomIsLowEnough;
+  }
+  // ---------------------------
 
   // ---------------------------
   // Distance Estimation Config
@@ -159,73 +197,88 @@ class _ObjectDetectionScreenState
     if (detections.isEmpty) return;
 
     final now = DateTime.now();
-    if (now.difference(_lastSpoken) <
-        _minSpeakInterval) return;
+    if (now.difference(_lastSpoken) < _minSpeakInterval) return;
 
-    final Map<String, int> counts = {};
-    final Map<String, List<double>> distances = {};
+    // Pick ONE most urgent "ahead" object
+    YOLOResult? mostUrgent;
+    double bestUrgencyScore = double.infinity; // smaller score = more urgent
+    double? chosenDistanceMeters;
 
-    for (final d in detections) {
-      final label =
-          d.className.trim().toLowerCase();
+    for (final d in detections)
+    {
+      final label = d.className.trim().toLowerCase();
 
-      if (d.confidence < _confidenceThreshold)
-        continue;
+      if (d.confidence < _confidenceThreshold) continue;
 
-      if (!onGroundObjects.contains(label))
-        continue;
+      if (!onGroundObjects.contains(label)) continue;
 
-      counts[label] =
-          (counts[label] ?? 0) + 1;
+      if (!_isInPath(d)) continue; // check if the object is in the "in-path" corridor
 
-      final dist = _estimateDistanceMeters(d);
-      if (dist != null) {
-        (distances[label] ??= []).add(dist);
+      final distMeters = _estimateDistanceMeters(d);
+
+      if (distMeters != null)
+      {
+        // Ignore far-away objects when distance is available
+        if (distMeters > _maxAlertDistanceMeters) continue;
+
+        // Urgency = closest distance wins
+        if (distMeters < bestUrgencyScore)
+        {
+          mostUrgent = d;
+          bestUrgencyScore = distMeters;
+          chosenDistanceMeters = distMeters;
+        }
+      }
+      else
+      {
+        // Fallback when we can't estimate meters:
+        // use bbox height as a closeness proxy (bigger box ≈ closer)
+        final boxHeight = d.normalizedBox.height;
+        if (boxHeight < _minBoxHeightForUnknownDistance) continue;
+
+        // Convert "bigger box ≈ closer" into "smaller is better"
+        final proxyScore = 1.0 / boxHeight;
+
+        if (proxyScore < bestUrgencyScore)
+        {
+          mostUrgent = d;
+          bestUrgencyScore = proxyScore;
+          chosenDistanceMeters = null;
+        }
       }
     }
+    
+    // If nothing qualifies as "in path", stay quiet.
+    if (mostUrgent == null) return;
 
-    if (counts.isEmpty) return;
+    final label = mostUrgent.className.trim().toLowerCase();
 
-    final List<String> parts = [];
+    // Sponsor requirement:
+    // Repeat alerts at a reasonable interval while the hazard remains in path.
+    // We rely on _minSpeakInterval for the repeat rate (no "changed enough" gating).
 
-    counts.forEach((label, count) {
-      String spokenLabel;
+    String sentence;
+    if (chosenDistanceMeters != null) // if distance is available
+    {
+      final rounded = (chosenDistanceMeters! * 2).round() / 2.0; // round to nearest 0.5 meters
+      sentence = '$label ahead, around ${rounded.toStringAsFixed(1)} meters'; // announce the distance
+    }
+    else // if distance is not available
+    {
+      sentence = '$label ahead'; // announce the object without distance
+    }
 
-      if (count == 1) {
-        spokenLabel = label;
-      } else if (label == 'person') {
-        spokenLabel = 'people';
-      } else {
-        spokenLabel = '${label}s';
-      }
-
-      String phrase = '$count $spokenLabel';
-
-      final dists = distances[label];
-      if (dists != null && dists.isNotEmpty) {
-        final minDist = dists.reduce(math.min);
-        final rounded =
-            (minDist * 2).round() / 2.0;
-
-        phrase +=
-            ' around ${rounded.toStringAsFixed(1)} meters away';
-      }
-
-      parts.add(phrase);
-    });
-
-    final sentence = parts.join(', ');
-
-    setState(() {
-      _statusText = sentence;
-    });
+    setState(() => _statusText = sentence); // update the status text
 
     _lastSpoken = now;
-    await _tts.speak(sentence);
+    await _tts.speak(sentence); // speak the sentence
   }
 
   @override
   Widget build(BuildContext context) {
+    // Enable GPU on iOS, disable on Android (especially emulators)
+    final bool useGpu = Platform.isIOS;
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -234,7 +287,7 @@ class _ObjectDetectionScreenState
           YOLOView(
             modelPath: 'yolo11n',
             task: YOLOTask.detect,
-            useGpu: false,
+            useGpu: useGpu,
             onResult: _speakDetections,
           ),
 

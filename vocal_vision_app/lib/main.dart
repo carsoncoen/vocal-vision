@@ -32,16 +32,22 @@ class _ObjectDetectionScreenState
     extends State<ObjectDetectionScreen> {
 
   // ---------------------------
-  // Distance Estimation Config
+  // Distance Estimation Config (heights in feet)
   // ---------------------------
-  static const Map<String, double> _averageHeightsM = {
-    'person': 1.7,
-    'bottle': 0.25,
-    'dining table': 0.75,
-    'tv': 0.6,
+  static const Map<String, double> _averageHeightsFeet = {
+    'person': 5.6,
+    'bottle': 0.8,
+    'dining table': 2.5,
+    'tv': 2.0,
+    'laptop': 0.6,
   };
 
-  static const double _cameraVerticalFovDeg = 60.0;
+  static const double _cameraVerticalFovDeg = 120;
+
+  // Close range: raw readings often clamp ~2.5 ft; remap [2.5, 4] ft -> [1, 4] ft.
+  static const double _closeRangeThresholdFeet = 4.0;
+  static const double _closeRangeRawMin = 2.5;
+  static const double _closeRangeDisplayMin = 1.0;
 
   final FlutterTts _tts = FlutterTts();
 
@@ -55,9 +61,9 @@ class _ObjectDetectionScreenState
       DateTime.fromMillisecondsSinceEpoch(0);
 
   static const Duration _minSpeakInterval =
-      Duration(seconds: 4);
+      Duration(seconds: 2);
 
-  static const double _confidenceThreshold = 0.55;
+  static const double _confidenceThreshold = 0.8;
 
   final List<String> onGroundObjects = [
     'person',
@@ -69,7 +75,8 @@ class _ObjectDetectionScreenState
     'suitcase',
     'couch',
     'bed',
-    'bus'
+    'bus',
+    'laptop',
   ];
 
   @override
@@ -129,10 +136,12 @@ class _ObjectDetectionScreenState
     _toggleSpeaking = false;
   }
 
-  double? _estimateDistanceMeters(YOLOResult d) {
+  // Estimates distance in feet from average heights and pinhole model.
+  // Below _closeRangeThresholdFeet, remaps the clamped band so 1–4 ft reads correctly.
+  double? _estimateDistanceFeet(YOLOResult d) {
     final label = d.className.trim().toLowerCase();
-    final realHeight = _averageHeightsM[label];
-    if (realHeight == null) return null;
+    final realHeightFeet = _averageHeightsFeet[label];
+    if (realHeightFeet == null) return null;
 
     final boxHeightNorm = d.normalizedBox.height;
     if (boxHeightNorm <= 0) return null;
@@ -140,14 +149,21 @@ class _ObjectDetectionScreenState
     final fovRad =
         _cameraVerticalFovDeg * math.pi / 180.0;
 
-    final distance =
-        realHeight /
+    double rawFeet =
+        realHeightFeet /
             (2.0 *
                 boxHeightNorm *
                 math.tan(fovRad / 2.0));
 
-    if (!distance.isFinite || distance <= 0) return null;
-    return distance;
+    if (!rawFeet.isFinite || rawFeet <= 0) return null;
+
+    if (rawFeet >= _closeRangeThresholdFeet) return rawFeet;
+
+    final t = (rawFeet - _closeRangeRawMin) /
+        (_closeRangeThresholdFeet - _closeRangeRawMin);
+    final displayed = _closeRangeDisplayMin +
+        t * (_closeRangeThresholdFeet - _closeRangeDisplayMin);
+    return displayed.clamp(_closeRangeDisplayMin, _closeRangeThresholdFeet);
   }
 
   Future<void> _speakDetections(
@@ -155,12 +171,7 @@ class _ObjectDetectionScreenState
 
     if (_toggleSpeaking) return;
     if (!_detectionEnabled) return;
-    if (_isSpeaking) return;
     if (detections.isEmpty) return;
-
-    final now = DateTime.now();
-    if (now.difference(_lastSpoken) <
-        _minSpeakInterval) return;
 
     final Map<String, int> counts = {};
     final Map<String, List<double>> distances = {};
@@ -178,7 +189,7 @@ class _ObjectDetectionScreenState
       counts[label] =
           (counts[label] ?? 0) + 1;
 
-      final dist = _estimateDistanceMeters(d);
+      final dist = _estimateDistanceFeet(d);
       if (dist != null) {
         (distances[label] ??= []).add(dist);
       }
@@ -211,12 +222,12 @@ class _ObjectDetectionScreenState
 
       final dists = distances[label];
       if (dists != null && dists.isNotEmpty) {
-        final minDist = dists.reduce(math.min);
-        final rounded =
-            (minDist * 2).round() / 2.0;
+        final minDistFeet = dists.reduce(math.min);
+        final roundedFeet =
+            (minDistFeet * 2).round() / 2.0;
 
         phrase +=
-            ' around ${rounded.toStringAsFixed(1)} meters away';
+            ' around ${roundedFeet.toStringAsFixed(1)} feet away';
       }
 
       parts.add(phrase);
@@ -224,9 +235,15 @@ class _ObjectDetectionScreenState
 
     final sentence = parts.join(', ');
 
-    setState(() {
-      _statusText = sentence;
-    });
+    if (mounted) {
+      setState(() {
+        _statusText = sentence;
+      });
+    }
+
+    if (_isSpeaking) return;
+    final now = DateTime.now();
+    if (now.difference(_lastSpoken) < _minSpeakInterval) return;
 
     _lastSpoken = now;
     await _tts.speak(sentence);

@@ -75,7 +75,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   static const Map<String, double> _averageHeightsM = {
     'person': 1.7,
     'bottle': 0.25,
-    'table': 0.75,
+    'dining table': 0.75,
     'tv': 0.6,
   };
 
@@ -99,7 +99,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
   final List<String> onGroundObjects = [
     'person',
-    'table',
+    'dining table',
     'chair',
     'dog',
     'cat',

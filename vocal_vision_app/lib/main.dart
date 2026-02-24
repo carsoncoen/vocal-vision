@@ -46,7 +46,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   static const double _minBoxBottomY = 0.55;
 
   // If we can estimate distance, ignore objects beyond this range (feet).
-  static const double _maxAlertDistanceFeet = 13.0;
+  static const double _maxAlertDistanceFeet = 3.0;
 
   // If we cannot estimate distance (unknown real height), require a minimum box height
   // to consider it close enough to announce.

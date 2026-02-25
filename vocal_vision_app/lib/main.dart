@@ -46,7 +46,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   static const double _minBoxBottomY = 0.55;
 
   // If we can estimate distance, ignore objects beyond this range (feet).
-  static const double _maxAlertDistanceFeet = 3.0;
+  static const double _maxAlertDistanceFeet = 6.0;
 
   // If we cannot estimate distance (unknown real height), require a minimum box height
   // to consider it close enough to announce.
@@ -95,11 +95,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
   String _statusText = "Scanning...";
 
-  DateTime _lastSpoken =
-      DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
 
-  static const Duration _minSpeakInterval =
-      Duration(seconds: 2);
+  static const Duration _minSpeakInterval = Duration(seconds: 2);
 
   static const double _confidenceThreshold = 0.8;
 
@@ -112,9 +110,6 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     'bicycle',
     'suitcase',
     'couch',
-    'bed',
-    'bus',
-    'laptop',
   ];
 
   @override
@@ -184,23 +179,16 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     final boxHeightNorm = d.normalizedBox.height;
     if (boxHeightNorm <= 0) return null;
 
-    final fovRad =
-        _cameraVerticalFovDeg * math.pi / 180.0;
+    final fovRad = _cameraVerticalFovDeg * math.pi / 180.0;
 
-    double rawFeet =
-        realHeightFeet /
-            (2.0 *
-                boxHeightNorm *
-                math.tan(fovRad / 2.0));
+    double rawFeet = realHeightFeet / (2.0 * boxHeightNorm * math.tan(fovRad / 2.0));
 
     if (!rawFeet.isFinite || rawFeet <= 0) return null;
 
     if (rawFeet >= _closeRangeThresholdFeet) return rawFeet;
 
-    final t = (rawFeet - _closeRangeRawMin) /
-        (_closeRangeThresholdFeet - _closeRangeRawMin);
-    final displayed = _closeRangeDisplayMin +
-        t * (_closeRangeThresholdFeet - _closeRangeDisplayMin);
+    final t = (rawFeet - _closeRangeRawMin) / (_closeRangeThresholdFeet - _closeRangeRawMin);
+    final displayed = _closeRangeDisplayMin + t * (_closeRangeThresholdFeet - _closeRangeDisplayMin);
     return displayed.clamp(_closeRangeDisplayMin, _closeRangeThresholdFeet);
   }
 

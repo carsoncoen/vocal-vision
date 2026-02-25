@@ -1,21 +1,18 @@
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:ultralytics_yolo/yolo.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 
-// Main entry point
-void main() => runApp(const YOLODemo());
+void main() {
+  runApp(const YOLODemo());
+}
 
-// Main widget
-class YOLODemo extends StatelessWidget
-{
+class YOLODemo extends StatelessWidget {
   const YOLODemo({super.key});
 
   @override
-  Widget build(BuildContext context)
-  {
+  Widget build(BuildContext context) {
     return const MaterialApp(
       debugShowCheckedModeBanner: false,
       home: ObjectDetectionScreen(),
@@ -23,69 +20,25 @@ class YOLODemo extends StatelessWidget
   }
 }
 
-// Object detection screen
-class ObjectDetectionScreen extends StatefulWidget
-{
+class ObjectDetectionScreen extends StatefulWidget {
   const ObjectDetectionScreen({super.key});
 
   @override
-  State<ObjectDetectionScreen> createState() => _ObjectDetectionScreenState();
+  State<ObjectDetectionScreen> createState() =>
+      _ObjectDetectionScreenState();
 }
 
-// Object detection screen state
-class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
-{
-  // ---------------------------
-  // "In-path" filtering
-  // Center corridor: only announce objects roughly "ahead" of the user.
-  static const double _pathCorridorLeftX = 0.30;
-  static const double _pathCorridorRightX = 0.70;
-
-  // Require the bottom of the box to be low enough in the frame.
-  // (Simple proxy for "likely near/on the floor plane".)
-  static const double _minBoxBottomY = 0.55;
-
-  // If we can estimate distance, ignore objects beyond this range (feet).
-  static const double _maxAlertDistanceFeet = 3.0;
-
-  // If we cannot estimate distance (unknown real height), require a minimum box height
-  // to consider it close enough to announce.
-  static const double _minBoxHeightForUnknownDistance = 0.35;
-
-  // Returns true if a detection is plausibly "in the user's path" based on box geometry.
-  bool _isInPath(YOLOResult d)
-  {
-    final Rect b = d.normalizedBox;
-
-    // Rect uses left/top, not x/y
-    final double centerX = b.left + (b.width / 2.0);
-    final double bottomY = b.top + b.height; // same as b.bottom
-
-    final bool withinCenterCorridor = (centerX >= _pathCorridorLeftX && centerX <= _pathCorridorRightX);
-
-    final bool bottomIsLowEnough = (bottomY >= _minBoxBottomY);
-
-    return withinCenterCorridor && bottomIsLowEnough;
-  }
-  // ---------------------------
+class _ObjectDetectionScreenState
+    extends State<ObjectDetectionScreen> {
 
   // ---------------------------
-  // Distance Estimation Config (heights in feet)
+  // Distance Estimation Config
   // ---------------------------
-  static const Map<String, double> _averageHeightsFeet = {
-    'person': 5.6,
-    'bottle': 0.8,
-    'dining table': 2.5,
-    'tv': 2.0,
-    'laptop': 0.6,
-  };
+  static const Map<String, double> _averageHeightsM = {
+  'door': 2.0,
+};
 
-  static const double _cameraVerticalFovDeg = 120;
-
-  // Close range: raw readings often clamp ~2.5 ft; remap [2.5, 4] ft -> [1, 4] ft.
-  static const double _closeRangeThresholdFeet = 4.0;
-  static const double _closeRangeRawMin = 2.5;
-  static const double _closeRangeDisplayMin = 1.0;
+  static const double _cameraVerticalFovDeg = 15.8;
 
   final FlutterTts _tts = FlutterTts();
 
@@ -99,23 +52,13 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       DateTime.fromMillisecondsSinceEpoch(0);
 
   static const Duration _minSpeakInterval =
-      Duration(seconds: 2);
+      Duration(seconds: 4);
 
-  static const double _confidenceThreshold = 0.8;
+  static const double _confidenceThreshold = 0.2;
 
   final List<String> onGroundObjects = [
-    'person',
-    'dining table',
-    'chair',
-    'dog',
-    'cat',
-    'bicycle',
-    'suitcase',
-    'couch',
-    'bed',
-    'bus',
-    'laptop',
-  ];
+  'door'
+];
 
   @override
   void initState() {
@@ -174,12 +117,10 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     _toggleSpeaking = false;
   }
 
-  // Estimates distance in feet from average heights and pinhole model.
-  // Below _closeRangeThresholdFeet, remaps the clamped band so 1–4 ft reads correctly.
-  double? _estimateDistanceFeet(YOLOResult d) {
+  double? _estimateDistanceMeters(YOLOResult d) {
     final label = d.className.trim().toLowerCase();
-    final realHeightFeet = _averageHeightsFeet[label];
-    if (realHeightFeet == null) return null;
+    final realHeight = _averageHeightsM[label];
+    if (realHeight == null) return null;
 
     final boxHeightNorm = d.normalizedBox.height;
     if (boxHeightNorm <= 0) return null;
@@ -187,21 +128,14 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     final fovRad =
         _cameraVerticalFovDeg * math.pi / 180.0;
 
-    double rawFeet =
-        realHeightFeet /
+    final distance =
+        realHeight /
             (2.0 *
                 boxHeightNorm *
                 math.tan(fovRad / 2.0));
 
-    if (!rawFeet.isFinite || rawFeet <= 0) return null;
-
-    if (rawFeet >= _closeRangeThresholdFeet) return rawFeet;
-
-    final t = (rawFeet - _closeRangeRawMin) /
-        (_closeRangeThresholdFeet - _closeRangeRawMin);
-    final displayed = _closeRangeDisplayMin +
-        t * (_closeRangeThresholdFeet - _closeRangeDisplayMin);
-    return displayed.clamp(_closeRangeDisplayMin, _closeRangeThresholdFeet);
+    if (!distance.isFinite || distance <= 0) return null;
+    return distance;
   }
 
   Future<void> _speakDetections(
@@ -209,74 +143,78 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
     if (_toggleSpeaking) return;
     if (!_detectionEnabled) return;
+    if (_isSpeaking) return;
     if (detections.isEmpty) return;
 
-    // Pick ONE most urgent "ahead" object (dev urgency logic)
-    YOLOResult? mostUrgent;
-    double bestUrgencyScore = double.infinity; // smaller score = more urgent
-    double? chosenDistanceFeet;
-
-    for (final d in detections)
-    {
-      final label = d.className.trim().toLowerCase();
-
-      if (d.confidence < _confidenceThreshold) continue;
-
-      if (!onGroundObjects.contains(label)) continue;
-
-      if (!_isInPath(d)) continue;
-
-      final distFeet = _estimateDistanceFeet(d);
-
-      if (distFeet != null)
-      {
-        if (distFeet > _maxAlertDistanceFeet) continue;
-
-        if (distFeet < bestUrgencyScore)
-        {
-          mostUrgent = d;
-          bestUrgencyScore = distFeet;
-          chosenDistanceFeet = distFeet;
-        }
-      }
-      else
-      {
-        final boxHeight = d.normalizedBox.height;
-        if (boxHeight < _minBoxHeightForUnknownDistance) continue;
-
-        final proxyScore = 1.0 / boxHeight;
-
-        if (proxyScore < bestUrgencyScore)
-        {
-          mostUrgent = d;
-          bestUrgencyScore = proxyScore;
-          chosenDistanceFeet = null;
-        }
-      }
-    }
-
-    if (mostUrgent == null) return;
-
-    final label = mostUrgent.className.trim().toLowerCase();
-
-    String sentence;
-    if (chosenDistanceFeet != null)
-    {
-      final roundedFeet = (chosenDistanceFeet! * 2).round() / 2.0;
-      sentence = '$label ahead, around ${roundedFeet.toStringAsFixed(1)} feet';
-    }
-    else
-    {
-      sentence = '$label ahead';
-    }
-
-    if (mounted) {
-      setState(() => _statusText = sentence);
-    }
-
-    if (_isSpeaking) return;
     final now = DateTime.now();
-    if (now.difference(_lastSpoken) < _minSpeakInterval) return;
+    if (now.difference(_lastSpoken) <
+        _minSpeakInterval) return;
+
+    final Map<String, int> counts = {};
+    final Map<String, List<double>> distances = {};
+
+    for (final d in detections) {
+      final label =
+          d.className.trim().toLowerCase();
+
+      if (d.confidence < _confidenceThreshold)
+        continue;
+
+      if (!onGroundObjects.contains(label))
+        continue;
+
+      counts[label] =
+          (counts[label] ?? 0) + 1;
+
+      final dist = _estimateDistanceMeters(d);
+      if (dist != null) {
+        (distances[label] ??= []).add(dist);
+      }
+    }
+
+    if (counts.isEmpty) return;
+
+    final List<String> parts = [];
+
+    counts.forEach((label, count) {
+      String spokenLabel;
+
+      if (count == 1) {
+        spokenLabel = label;
+      } else if (label == 'person') {
+        spokenLabel = 'people';
+      } else {
+        spokenLabel = '${label}s';
+      }
+
+      if (label == 'dining table') {
+        if (spokenLabel == 'dining tables') {
+          spokenLabel = 'tables';
+        } else {
+          spokenLabel = 'table';
+        }
+      }
+
+      String phrase = '$count $spokenLabel';
+
+      final dists = distances[label];
+      if (dists != null && dists.isNotEmpty) {
+        final minDist = dists.reduce(math.min);
+        final rounded =
+            (minDist * 2).round() / 2.0;
+
+        phrase +=
+            ' around ${rounded.toStringAsFixed(1)} meters away';
+      }
+
+      parts.add(phrase);
+    });
+
+    final sentence = parts.join(', ');
+
+    setState(() {
+      _statusText = sentence;
+    });
 
     _lastSpoken = now;
     await _tts.speak(sentence);
@@ -284,20 +222,20 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
   @override
   Widget build(BuildContext context) {
-    // Enable GPU on iOS, disable on Android (especially emulators)
-    final bool useGpu = Platform.isIOS;
-
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
 
           YOLOView(
-            modelPath: 'yolo11n',
-            task: YOLOTask.detect,
-            useGpu: useGpu,
-            onResult: _speakDetections,
-          ),
+  modelPath: 'assets/models/door_model.tflite',
+  task: YOLOTask.detect,
+  useGpu: false,
+  onResult: (results) {
+    print("RAW DETECTIONS: $results");
+    _speakDetections(results);
+  },
+),
 
           if (!_detectionEnabled)
             Container(

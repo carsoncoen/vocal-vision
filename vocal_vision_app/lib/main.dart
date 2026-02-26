@@ -80,12 +80,10 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     'laptop': 0.6,
   };
 
-  static const double _cameraVerticalFovDeg = 120;
-
-  // Close range: raw readings often clamp ~2.5 ft; remap [2.5, 4] ft -> [1, 4] ft.
-  static const double _closeRangeThresholdFeet = 4.0;
-  static const double _closeRangeRawMin = 2.5;
-  static const double _closeRangeDisplayMin = 1.0;
+  // Use a more realistic vertical FOV for the iPhone 1x main camera.
+  // Keep the previous value for non-iOS platforms so existing behavior is preserved.
+  static final double _cameraVerticalFovDeg =
+      Platform.isIOS ? 50.0 : 120.0;
 
   final FlutterTts _tts = FlutterTts();
 
@@ -181,15 +179,13 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
     final fovRad = _cameraVerticalFovDeg * math.pi / 180.0;
 
-    double rawFeet = realHeightFeet / (2.0 * boxHeightNorm * math.tan(fovRad / 2.0));
+    final double rawFeet = realHeightFeet / (2.0 * boxHeightNorm * math.tan(fovRad / 2.0));
+    print('fovRad: $fovRad');
 
     if (!rawFeet.isFinite || rawFeet <= 0) return null;
 
-    if (rawFeet >= _closeRangeThresholdFeet) return rawFeet;
-
-    final t = (rawFeet - _closeRangeRawMin) / (_closeRangeThresholdFeet - _closeRangeRawMin);
-    final displayed = _closeRangeDisplayMin + t * (_closeRangeThresholdFeet - _closeRangeDisplayMin);
-    return displayed.clamp(_closeRangeDisplayMin, _closeRangeThresholdFeet);
+    // Return the raw geometric estimate so we can see true behavior on-device.
+    return rawFeet;
   }
 
   Future<void> _speakDetections(

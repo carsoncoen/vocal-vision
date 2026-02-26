@@ -78,12 +78,12 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     'dining table': 2.5,
     'tv': 2.0,
     'laptop': 0.6,
+    'chair': 2.6,
   };
 
   // Use a more realistic vertical FOV for the iPhone 1x main camera.
   // Keep the previous value for non-iOS platforms so existing behavior is preserved.
-  static final double _cameraVerticalFovDeg =
-      Platform.isIOS ? 50.0 : 120.0;
+  static final double _cameraVerticalFovDeg = Platform.isIOS ? 70.0 : 120.0;
 
   final FlutterTts _tts = FlutterTts();
 
@@ -180,7 +180,6 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     final fovRad = _cameraVerticalFovDeg * math.pi / 180.0;
 
     final double rawFeet = realHeightFeet / (2.0 * boxHeightNorm * math.tan(fovRad / 2.0));
-    print('fovRad: $fovRad');
 
     if (!rawFeet.isFinite || rawFeet <= 0) return null;
 

@@ -46,7 +46,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   static const double _minBoxBottomY = 0.55;
 
   // If we can estimate distance, ignore objects beyond this range (feet).
-  static const double _maxAlertDistanceFeet = 3.0;
+  static const double _maxAlertDistanceFeet = 10.0;
 
   // If we cannot estimate distance (unknown real height), require a minimum box height
   // to consider it close enough to announce.
@@ -73,14 +73,16 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   // Distance Estimation Config (heights in feet)
   // ---------------------------
   static const Map<String, double> _averageHeightsFeet = {
-    'person': 5.6,
+    'person': 5.0,
     'bottle': 0.8,
     'dining table': 2.5,
     'tv': 2.0,
     'laptop': 0.6,
+    'door': 6,
+    'chair': 2.6
   };
 
-  static const double _cameraVerticalFovDeg = 120;
+  static const double _cameraVerticalFovDeg = 70;
 
   // Close range: raw readings often clamp ~2.5 ft; remap [2.5, 4] ft -> [1, 4] ft.
   static const double _closeRangeThresholdFeet = 4.0;
@@ -114,7 +116,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     'couch',
     'bed',
     'bus',
-    'laptop',
+    'door'
   ];
 
   @override
@@ -257,7 +259,14 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
     if (mostUrgent == null) return;
 
-    final label = mostUrgent.className.trim().toLowerCase();
+    var label = mostUrgent.className.trim().toLowerCase();
+
+    // do not overwrite or change these statements for dining table(s) to table(s) label conversion
+    if (label == 'dining table') {
+      label = 'table';
+    } else if (label == 'dining tables') {
+      label = 'tables';
+    }
 
     String sentence;
     if (chosenDistanceFeet != null)

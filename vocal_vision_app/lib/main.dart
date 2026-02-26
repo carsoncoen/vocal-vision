@@ -228,7 +228,7 @@ class _ObjectDetectionScreenState
         children: [
 
           YOLOView(
-  modelPath: 'assets/models/door_model.tflite',
+  modelPath: 'door_model',
   task: YOLOTask.detect,
   useGpu: false,
   onResult: (results) {

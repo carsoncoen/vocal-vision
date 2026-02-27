@@ -48,6 +48,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   // If we can estimate distance, ignore objects beyond this range (feet).
   static const double _maxAlertDistanceFeet = 6.0;
 
+  // Distance at which we interrupt normal TTS throttling and issue an urgent warning (feet).
+  static const double _dangerDistanceFeet = 4.0;
+
   // If we cannot estimate distance (unknown real height), require a minimum box height
   // to consider it close enough to announce.
   static const double _minBoxHeightForUnknownDistance = 0.35;
@@ -96,6 +99,10 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
 
   static const Duration _minSpeakInterval = Duration(seconds: 2);
+
+  // Separate cooldown for urgent "danger" warnings so we don't spam every frame.
+  DateTime _lastDangerSpoken = DateTime.fromMillisecondsSinceEpoch(0);
+  static const Duration _minDangerInterval = Duration(seconds: 2);
 
   static const double _confidenceThreshold = 0.8;
 
@@ -199,6 +206,10 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     double bestUrgencyScore = double.infinity; // smaller score = more urgent
     double? chosenDistanceFeet;
 
+    // Track any object that is within the "danger" distance threshold in front of the user.
+    YOLOResult? dangerObject;
+    double closestDangerDistance = double.infinity;
+
     for (final d in detections)
     {
       final label = d.className.trim().toLowerCase();
@@ -213,8 +224,17 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
       if (distFeet != null)
       {
+        // First, track any object that is inside our "danger" zone.
+        if (distFeet < _dangerDistanceFeet && distFeet < closestDangerDistance)
+        {
+          dangerObject = d;
+          closestDangerDistance = distFeet;
+        }
+
+        // Ignore non-dangerous objects that are too far away entirely.
         if (distFeet > _maxAlertDistanceFeet) continue;
 
+        // Otherwise, keep the closest as the most urgent "regular" announcement.
         if (distFeet < bestUrgencyScore)
         {
           mostUrgent = d;
@@ -236,6 +256,30 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
           chosenDistanceFeet = null;
         }
       }
+    }
+
+    // If we have a very close object, immediately warn the user and bypass the normal speak interval.
+    if (dangerObject != null)
+    {
+      final label = dangerObject.className.trim().toLowerCase();
+      final String sentence = 'Warning, $label in front of you';
+
+      if (mounted) {
+        setState(() => _statusText = sentence);
+      }
+
+      final now = DateTime.now();
+      if (now.difference(_lastDangerSpoken) < _minDangerInterval) return;
+
+      _lastDangerSpoken = now;
+      _lastSpoken = now;
+
+      // Interrupt any current speech so the warning is heard immediately.
+      await _tts.stop();
+      _isSpeaking = false;
+
+      await _tts.speak(sentence);
+      return;
     }
 
     if (mostUrgent == null) return;

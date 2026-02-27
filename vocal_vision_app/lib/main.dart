@@ -46,7 +46,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   static const double _minBoxBottomY = 0.55;
 
   // If we can estimate distance, ignore objects beyond this range (feet).
-  static const double _maxAlertDistanceFeet = 6.0;
+  static const double _maxAlertDistanceFeet = 10.0;
 
   // Distance at which we interrupt normal TTS throttling and issue an urgent warning (feet).
   static const double _dangerDistanceFeet = 4.0;
@@ -76,17 +76,21 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   // Distance Estimation Config (heights in feet)
   // ---------------------------
   static const Map<String, double> _averageHeightsFeet = {
-    'person': 5.6,
+    'person': 5.0,
     'bottle': 0.8,
     'dining table': 2.5,
     'tv': 2.0,
     'laptop': 0.6,
-    'chair': 2.6,
+    'door': 6,
+    'chair': 2.6
   };
 
-  // Use a more realistic vertical FOV for the iPhone 1x main camera.
-  // Keep the previous value for non-iOS platforms so existing behavior is preserved.
   static final double _cameraVerticalFovDeg = Platform.isIOS ? 70.0 : 120.0;
+
+  // Close range: raw readings often clamp ~2.5 ft; remap [2.5, 4] ft -> [1, 4] ft.
+  static const double _closeRangeThresholdFeet = 4.0;
+  static const double _closeRangeRawMin = 2.5;
+  static const double _closeRangeDisplayMin = 1.0;
 
   final FlutterTts _tts = FlutterTts();
 
@@ -115,6 +119,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     'bicycle',
     'suitcase',
     'couch',
+    'bed',
+    'bus',
+    'door'
   ];
 
   @override
@@ -284,7 +291,14 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
     if (mostUrgent == null) return;
 
-    final label = mostUrgent.className.trim().toLowerCase();
+    var label = mostUrgent.className.trim().toLowerCase();
+
+    // do not overwrite or change these statements for dining table(s) to table(s) label conversion
+    if (label == 'dining table') {
+      label = 'table';
+    } else if (label == 'dining tables') {
+      label = 'tables';
+    }
 
     String sentence;
     if (chosenDistanceFeet != null)

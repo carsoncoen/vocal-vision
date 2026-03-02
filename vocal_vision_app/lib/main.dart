@@ -268,7 +268,15 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     // If we have a very close object, immediately warn the user and bypass the normal speak interval.
     if (dangerObject != null)
     {
-      final label = dangerObject.className.trim().toLowerCase();
+      var label = dangerObject.className.trim().toLowerCase();
+
+      // do not overwrite or change these statements for dining table(s) to table(s) label conversion
+      if (label == 'dining table') {
+        label = 'table';
+      } else if (label == 'dining tables') {
+        label = 'tables';
+      }
+      
       final String sentence = 'Warning, $label in front of you';
 
       if (mounted) {

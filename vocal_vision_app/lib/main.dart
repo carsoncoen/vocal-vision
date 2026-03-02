@@ -5,6 +5,19 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:ultralytics_yolo/yolo.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 
+// helper to rank candidates for top-3 speaking
+class _Candidate {
+  final YOLOResult d;
+  final double? distFeet;    // null if unknown
+  final double boxHeight;    // used for unknown-distance ordering
+
+  _Candidate({
+    required this.d,
+    required this.distFeet,
+    required this.boxHeight,
+  });
+}
+
 // Main entry point
 void main() => runApp(const YOLODemo());
 
@@ -49,10 +62,10 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   static const double _maxAlertDistanceFeet = 10.0;
 
   // Distance at which we interrupt normal TTS throttling and issue an urgent warning (feet).
-  static const double _dangerDistanceFeet = 4.0;
+  static const double _dangerDistanceFeet = 2.0;
 
-  // If we cannot estimate distance (unknown real height), require a minimum box height
-  // to consider it close enough to announce.
+  // If we cannot estimate distance (unknown real height), require a minimum box height to consider it close enough to announce
+  // 0.35 means 35% of the screen height from the bottom of the screen
   static const double _minBoxHeightForUnknownDistance = 0.35;
 
   // Returns true if a detection is plausibly "in the user's path" based on box geometry.
@@ -108,7 +121,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   DateTime _lastDangerSpoken = DateTime.fromMillisecondsSinceEpoch(0);
   static const Duration _minDangerInterval = Duration(seconds: 2);
 
-  static const double _confidenceThreshold = 0.8;
+  static const double _confidenceThreshold = 0.3;
 
   final List<String> onGroundObjects = [
     'person',
@@ -201,17 +214,19 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     return rawFeet;
   }
 
-  Future<void> _speakDetections(
-      List<YOLOResult> detections) async {
-
+  Future<void> _speakDetections(List<YOLOResult> detections) async {
     if (_toggleSpeaking) return;
     if (!_detectionEnabled) return;
     if (detections.isEmpty) return;
 
+    // Collect candidate objects with a "closeness" score (higher = closer)
+    // Also keep distance if we can compute it (for speaking).
+    final List<_Candidate> candidates = [];
+
     // Pick ONE most urgent "ahead" object (dev urgency logic)
-    YOLOResult? mostUrgent;
-    double bestUrgencyScore = double.infinity; // smaller score = more urgent
-    double? chosenDistanceFeet;
+    // YOLOResult? mostUrgent;
+    // double bestUrgencyScore = double.infinity; // smaller score = more urgent
+    // double? chosenDistanceFeet;
 
     // Track any object that is within the "danger" distance threshold in front of the user.
     YOLOResult? dangerObject;
@@ -222,9 +237,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       final label = d.className.trim().toLowerCase();
 
       if (d.confidence < _confidenceThreshold) continue;
-
       if (!onGroundObjects.contains(label)) continue;
-
       if (!_isInPath(d)) continue;
 
       final distFeet = _estimateDistanceFeet(d);
@@ -241,34 +254,53 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
         // Ignore non-dangerous objects that are too far away entirely.
         if (distFeet > _maxAlertDistanceFeet) continue;
 
-        // Otherwise, keep the closest as the most urgent "regular" announcement.
-        if (distFeet < bestUrgencyScore)
-        {
-          mostUrgent = d;
-          bestUrgencyScore = distFeet;
-          chosenDistanceFeet = distFeet;
-        }
+        // ADDED: store known-distance candidate
+        candidates.add(_Candidate(
+          d: d,
+          distFeet: distFeet,
+          boxHeight: d.normalizedBox.height,
+        ));
+
+        // // Otherwise, keep the closest as the most urgent "regular" announcement.
+        // if (distFeet < bestUrgencyScore)
+        // {
+        //   mostUrgent = d;
+        //   bestUrgencyScore = distFeet;
+        //   chosenDistanceFeet = distFeet;
+        // }
       }
-      else
+      else // unknown distance
       {
         final boxHeight = d.normalizedBox.height;
         if (boxHeight < _minBoxHeightForUnknownDistance) continue;
 
-        final proxyScore = 1.0 / boxHeight;
+        // ADDED: store unknown-distance candidate
+        candidates.add(_Candidate(
+          d: d,
+          distFeet: null,
+          boxHeight: boxHeight,
+        ));
 
-        if (proxyScore < bestUrgencyScore)
-        {
-          mostUrgent = d;
-          bestUrgencyScore = proxyScore;
-          chosenDistanceFeet = null;
-        }
+        // final proxyScore = 1.0 / boxHeight;
+
+        // if (proxyScore < bestUrgencyScore)
+        // {
+        //   mostUrgent = d;
+        //   bestUrgencyScore = proxyScore;
+        //   chosenDistanceFeet = null;
+        // }
       }
     }
 
     // If we have a very close object, immediately warn the user and bypass the normal speak interval.
     if (dangerObject != null)
     {
-      final label = dangerObject.className.trim().toLowerCase();
+      var label = dangerObject.className.trim().toLowerCase();
+
+      // Added this to convert dining table(s) to table(s) label conversion
+      if (label == 'dining table') label = 'table';
+      if (label == 'dining tables') label = 'tables';
+
       final String sentence = 'Warning, $label in front of you';
 
       if (mounted) {
@@ -289,27 +321,91 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       return;
     }
 
-    if (mostUrgent == null) return;
+    // if nothing qualifies, stop
+    if (candidates.isEmpty) return;
 
-    var label = mostUrgent.className.trim().toLowerCase();
+    // Sort candidates so the "closest / most relevant" items come first.
+    candidates.sort((a, b) {
 
-    // do not overwrite or change these statements for dining table(s) to table(s) label conversion
-    if (label == 'dining table') {
-      label = 'table';
-    } else if (label == 'dining tables') {
-      label = 'tables';
-    }
+      final bool aHasDist = (a.distFeet != null);
+      final bool bHasDist = (b.distFeet != null);
 
-    String sentence;
-    if (chosenDistanceFeet != null)
+      // Case 1: both have real distance -> sort by closest (smaller number) first
+      if (aHasDist && bHasDist) {
+        if (a.distFeet! < b.distFeet!) return -1; // a comes before b
+        if (a.distFeet! > b.distFeet!) return 1;  // b comes before a
+
+        // Same distance: pick the one YOLO is more confident about
+        if (a.d.confidence > b.d.confidence) return -1;
+        if (a.d.confidence < b.d.confidence) return 1;
+
+        return 0; // fully tied
+      }
+
+      // Case 2: only one has real distance -> put the one WITH distance first
+      if (aHasDist && !bHasDist) return -1; // a first
+      if (!aHasDist && bHasDist) return 1;  // b first
+
+      // Case 3: neither has real distance -> use boxHeight as "closeness" proxy
+      if (a.boxHeight > b.boxHeight) return -1; // bigger box first
+      if (a.boxHeight < b.boxHeight) return 1;
+
+      // Same box height: higher confidence first
+      if (a.d.confidence > b.d.confidence) return -1;
+      if (a.d.confidence < b.d.confidence) return 1;
+
+      return 0; // fully tied
+    });
+
+    final top3 = candidates.take(3).toList();
+
+    // build one sentence with closest first
+    final parts = <String>[];
+    for (final c in top3)
     {
-      final roundedFeet = (chosenDistanceFeet! * 2).round() / 2.0;
-      sentence = '$label ahead, around ${roundedFeet.toStringAsFixed(1)} feet';
+      var lbl = c.d.className.trim().toLowerCase();
+
+      // keep your dining table -> table conversion (only the relevant part)
+      if (lbl == 'dining table') {
+        lbl = 'table';
+      } else if (lbl == 'dining tables') {
+        lbl = 'tables';
+      }
+
+      if (c.distFeet != null)
+      {
+        final roundedFeet = (c.distFeet! * 2).round() / 2.0;
+        parts.add('$lbl ${roundedFeet.toStringAsFixed(1)} feet');
+      }
+      else
+      {
+        parts.add('$lbl distance unknown');
+      }
     }
-    else
-    {
-      sentence = '$label ahead';
-    }
+
+    final sentence = 'Ahead: ${parts.join(', ')}';
+
+    // if (mostUrgent == null) return;
+
+    // var label = mostUrgent.className.trim().toLowerCase();
+
+    // // do not overwrite or change these statements for dining table(s) to table(s) label conversion
+    // if (label == 'dining table') {
+    //   label = 'table';
+    // } else if (label == 'dining tables') {
+    //   label = 'tables';
+    // }
+
+    // String sentence;
+    // if (chosenDistanceFeet != null)
+    // {
+    //   final roundedFeet = (chosenDistanceFeet! * 2).round() / 2.0;
+    //   sentence = '$label ahead, around ${roundedFeet.toStringAsFixed(1)} feet';
+    // }
+    // else
+    // {
+    //   sentence = '$label ahead';
+    // }
 
     if (mounted) {
       setState(() => _statusText = sentence);

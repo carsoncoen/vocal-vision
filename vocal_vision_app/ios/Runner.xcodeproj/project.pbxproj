@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		00F60853E63C746B4DE7C4B8 /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0A50B30CD1244C635FE6AD2 /* Pods_RunnerTests.framework */; };
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
+		183E1F762F5781BE00A293CF /* DepthStreamHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 183E1F752F5781B900A293CF /* DepthStreamHandler.swift */; };
 		18B6CD752F50A1FF006A6CF3 /* best.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = 18B6CD742F50A1FF006A6CF3 /* best.mlpackage */; };
 		18E0C8B52F3EF6CE00327FF0 /* yolo11n.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = 18E0C8B42F3EF6CE00327FF0 /* yolo11n.mlpackage */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
@@ -48,6 +49,7 @@
 		05392D562B994BA1A200AF28 /* Pods-RunnerTests.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.profile.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.profile.xcconfig"; sourceTree = "<group>"; };
 		1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GeneratedPluginRegistrant.h; sourceTree = "<group>"; };
 		1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = GeneratedPluginRegistrant.m; sourceTree = "<group>"; };
+		183E1F752F5781B900A293CF /* DepthStreamHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthStreamHandler.swift; sourceTree = "<group>"; };
 		18B6CD742F50A1FF006A6CF3 /* best.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = best.mlpackage; sourceTree = "<group>"; };
 		18E0C8B42F3EF6CE00327FF0 /* yolo11n.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = yolo11n.mlpackage; sourceTree = "<group>"; };
 		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
@@ -147,6 +149,7 @@
 		97C146F01CF9000F007C117D /* Runner */ = {
 			isa = PBXGroup;
 			children = (
+				183E1F752F5781B900A293CF /* DepthStreamHandler.swift */,
 				97C146FA1CF9000F007C117D /* Main.storyboard */,
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
 				97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */,
@@ -383,6 +386,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
+				183E1F762F5781BE00A293CF /* DepthStreamHandler.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				18E0C8B52F3EF6CE00327FF0 /* yolo11n.mlpackage in Sources */,
 				18B6CD752F50A1FF006A6CF3 /* best.mlpackage in Sources */,
@@ -483,6 +487,7 @@
 				DEVELOPMENT_TEAM = N4364GJQ7R;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -669,6 +674,7 @@
 				DEVELOPMENT_TEAM = N4364GJQ7R;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -695,6 +701,7 @@
 				DEVELOPMENT_TEAM = N4364GJQ7R;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

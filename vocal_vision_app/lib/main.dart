@@ -48,6 +48,11 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
   static const Duration _minSpeakInterval = Duration(seconds: 3);
 
+  // "Path Clear" announcement when no objects persist.
+  static const Duration _pathClearThreshold = Duration(milliseconds: 500);
+  DateTime _lastTimeHadAnyGroups = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _pathClearAnnouncedSinceLastObjects = false;
+
   // Normal reminders are repeated at a controlled interval while the same
   // stable summary remains active.
   static const Duration _normalRepeatInterval = Duration(seconds: 4);
@@ -123,6 +128,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
     _lastDangerSpoken = DateTime.fromMillisecondsSinceEpoch(0);
     _lastSpokenNormalSummaryKey = '';
+    _lastTimeHadAnyGroups = DateTime.fromMillisecondsSinceEpoch(0);
+    _pathClearAnnouncedSinceLastObjects = false;
 
     _toggleSpeaking = false;
   }
@@ -146,6 +153,13 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     }
 
     final AnnouncementDecision decision = _announcementEngine.processDetections(detections);
+    final DateTime now = DateTime.now();
+
+    final bool hasAnyGroups = decision.type != AnnouncementType.none || decision.topGroups.isNotEmpty;
+    if (hasAnyGroups) {
+      _lastTimeHadAnyGroups = now;
+      _pathClearAnnouncedSinceLastObjects = false;
+    }
 
     if (decision.statusText.isNotEmpty && mounted && _statusText != decision.statusText) {
       setState(() => _statusText = decision.statusText);
@@ -155,14 +169,23 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     // so it can be spoken again if it later reappears.
     if (decision.type == AnnouncementType.none && decision.topGroups.isEmpty) {
       _lastSpokenNormalSummaryKey = '';
+
+      final bool thresholdPassed = now.difference(_lastTimeHadAnyGroups) >= _pathClearThreshold;
+      if (thresholdPassed && !_pathClearAnnouncedSinceLastObjects && !_isSpeaking) {
+        _pathClearAnnouncedSinceLastObjects = true;
+        _lastSpoken = now;
+        if (mounted && _statusText != 'Path Clear') {
+          setState(() => _statusText = 'Path Clear');
+        }
+        await _tts.speak('Path Clear');
+      }
+
       return;
     }
 
     if (!decision.shouldSpeak) {
       return;
     }
-
-    final DateTime now = DateTime.now();
 
     if (decision.type == AnnouncementType.danger) {
       if (now.difference(_lastDangerSpoken) < _minDangerInterval) {

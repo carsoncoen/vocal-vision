@@ -31,6 +31,11 @@ class _LidarDetectionScreenState extends State<LidarDetectionScreen> {
 
   final FlutterTts _tts = FlutterTts();
 
+  DateTime _lastUiUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+  
+  // Change this to control how fast the text updates (500ms = 2 times a second)
+  static const Duration _uiUpdateInterval = Duration(milliseconds: 500);
+
   bool _isSpeaking = false;
   bool _detectionEnabled = true;
   bool _toggleSpeaking = false;
@@ -118,11 +123,16 @@ class _LidarDetectionScreenState extends State<LidarDetectionScreen> {
     if (distanceFeet < _dangerDistanceFeet) {
       final String sentence = 'Warning, $label in front of you';
 
-      if (mounted) {
-        setState(() => _statusText = sentence);
+      final now = DateTime.now();
+
+      // THROTTLE THE UI UPDATE
+      if (now.difference(_lastUiUpdate) > _uiUpdateInterval) {
+        if (mounted) {
+          setState(() => _statusText = sentence);
+        }
+        _lastUiUpdate = now;
       }
 
-      final now = DateTime.now();
       if (now.difference(_lastDangerSpoken) < _minDangerInterval) return;
 
       _lastDangerSpoken = now;
@@ -137,16 +147,21 @@ class _LidarDetectionScreenState extends State<LidarDetectionScreen> {
     }
 
     // --- Normal Announcement Logic ---
-    final double roundedFeet = (distanceFeet * 2).round() / 2.0;
+    final double roundedFeet = (distanceFeet * 2).round() / 2.0; 
     final String sentence = '$label ahead, around ${roundedFeet.toStringAsFixed(1)} feet';
 
-    if (mounted) {
-      setState(() => _statusText = sentence);
+    final now = DateTime.now();
+
+    // THROTTLE THE UI UPDATE
+    if (now.difference(_lastUiUpdate) > _uiUpdateInterval) {
+      if (mounted) {
+        setState(() => _statusText = sentence);
+      }
+      _lastUiUpdate = now;
     }
 
     if (_isSpeaking) return;
     
-    final now = DateTime.now();
     if (now.difference(_lastSpoken) < _minSpeakInterval) return;
 
     _lastSpoken = now;

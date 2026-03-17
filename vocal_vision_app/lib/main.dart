@@ -46,7 +46,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   String _statusText = 'Scanning...';
 
   DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _minSpeakInterval = Duration(seconds: 2);
+  static const Duration _minSpeakInterval = Duration(seconds: 3);
 
   // Normal reminders are repeated at a controlled interval while the same
   // stable summary remains active.
@@ -70,7 +70,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     // The sponsor is comfortable with faster speech, so this is intentionally
     // quicker than the original value. It keeps mandatory distance callouts from
     // sounding too delayed.
-    await _tts.setSpeechRate(0.7);
+    await _tts.setSpeechRate(0.5);
 
     // We still wait for completion so _isSpeaking reflects real TTS state.
     await _tts.awaitSpeakCompletion(true);

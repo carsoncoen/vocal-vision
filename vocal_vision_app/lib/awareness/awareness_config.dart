@@ -85,7 +85,7 @@ class AwarenessConfig {
 
       personPriorityOverrideFeet: 1.0,
 
-      minStableCycles: 2,
+      minStableCycles: 5,
 
       distanceBufferFeet: 0.5,
 
@@ -115,7 +115,8 @@ class AwarenessConfig {
         'door',
       ],
       
-      cameraVerticalFovDeg: Platform.isIOS ? 70.0 : 120.0,
+      //cameraVerticalFovDeg: Platform.isIOS ? 70.0 : 120.0,
+      cameraVerticalFovDeg: 120.0,
     );
   }
 }

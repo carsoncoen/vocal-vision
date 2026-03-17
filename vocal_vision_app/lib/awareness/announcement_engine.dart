@@ -638,11 +638,11 @@ class AnnouncementEngine
       if (distanceText.isEmpty) {
         parts.add('$spokenLabel $directionText');
       } else {
-        parts.add('$spokenLabel $directionText, $distanceText');
+        parts.add('$spokenLabel $directionText $distanceText');
       }
     }
 
-    return parts.join('. ');
+    return parts.join(', ');
   }
 
   /// Builds the distance phrase for one group.

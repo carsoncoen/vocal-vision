@@ -333,12 +333,15 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
   @override
   Widget build(BuildContext context) {
-    // Enable GPU on iOS, disable on Android (especially emulators)
-    final bool useGpu = Platform.isIOS;
+  // Enable GPU on iOS, disable on Android (especially emulators)
+  final bool useGpu = Platform.isIOS;
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
+  return Scaffold(
+    backgroundColor: Colors.black,
+    body: GestureDetector( // 👈 ADDED
+      behavior: HitTestBehavior.opaque,
+      onDoubleTap: _toggleDetection, // 👈 ADDED
+      child: Stack(
         children: [
 
           YOLOView(
@@ -353,7 +356,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
               color: Colors.black.withOpacity(0.6),
               child: const Center(
                 child: Text(
-                  'Detection Paused',
+                  'Detection Paused\nDouble tap to resume', // 👈 small UX improvement
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 24,
@@ -380,21 +384,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
             ),
           ),
 
-          Positioned(
-            bottom: 60,
-            left: 40,
-            right: 40,
-            child: ElevatedButton(
-              onPressed: _toggleDetection,
-              child: Text(
-                _detectionEnabled
-                    ? 'Pause Detection'
-                    : 'Resume Detection',
-              ),
-            ),
-          ),
+
         ],
       ),
-    );
-  }
-}
+    ),
+  );
+}}

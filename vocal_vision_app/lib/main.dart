@@ -338,9 +338,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
   return Scaffold(
     backgroundColor: Colors.black,
-    body: GestureDetector( // 👈 ADDED
+    body: GestureDetector( 
       behavior: HitTestBehavior.opaque,
-      onDoubleTap: _toggleDetection, // 👈 ADDED
+      onDoubleTap: _toggleDetection, 
       child: Stack(
         children: [
 
@@ -356,7 +356,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
               color: Colors.black.withOpacity(0.6),
               child: const Center(
                 child: Text(
-                  'Detection Paused\nDouble tap to resume', // 👈 small UX improvement
+                  'Detection Paused\nDouble tap to resume', 
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white,

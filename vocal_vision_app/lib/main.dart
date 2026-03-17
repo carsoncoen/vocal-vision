@@ -1,18 +1,21 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:ultralytics_yolo/yolo.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 
-void main() {
-  runApp(const YOLODemo());
-}
+// Main entry point
+void main() => runApp(const YOLODemo());
 
-class YOLODemo extends StatelessWidget {
+// Main widget
+class YOLODemo extends StatelessWidget
+{
   const YOLODemo({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context)
+  {
     return const MaterialApp(
       debugShowCheckedModeBanner: false,
       home: ObjectDetectionScreen(),
@@ -20,25 +23,74 @@ class YOLODemo extends StatelessWidget {
   }
 }
 
-class ObjectDetectionScreen extends StatefulWidget {
+// Object detection screen
+class ObjectDetectionScreen extends StatefulWidget
+{
   const ObjectDetectionScreen({super.key});
 
   @override
-  State<ObjectDetectionScreen> createState() =>
-      _ObjectDetectionScreenState();
+  State<ObjectDetectionScreen> createState() => _ObjectDetectionScreenState();
 }
 
-class _ObjectDetectionScreenState
-    extends State<ObjectDetectionScreen> {
+// Object detection screen state
+class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
+{
+  // ---------------------------
+  // "In-path" filtering
+  // Center corridor: only announce objects roughly "ahead" of the user.
+  static const double _pathCorridorLeftX = 0.30;
+  static const double _pathCorridorRightX = 0.70;
+
+  // Require the bottom of the box to be low enough in the frame.
+  // (Simple proxy for "likely near/on the floor plane".)
+  static const double _minBoxBottomY = 0.55;
+
+  // If we can estimate distance, ignore objects beyond this range (feet).
+  static const double _maxAlertDistanceFeet = 10.0;
+
+  // Distance at which we interrupt normal TTS throttling and issue an urgent warning (feet).
+  static const double _dangerDistanceFeet = 4.0;
+
+  // If we cannot estimate distance (unknown real height), require a minimum box height
+  // to consider it close enough to announce.
+  static const double _minBoxHeightForUnknownDistance = 0.35;
+
+  // Returns true if a detection is plausibly "in the user's path" based on box geometry.
+  bool _isInPath(YOLOResult d)
+  {
+    final Rect b = d.normalizedBox;
+
+    // Rect uses left/top, not x/y
+    final double centerX = b.left + (b.width / 2.0);
+    final double bottomY = b.top + b.height; // same as b.bottom
+
+    final bool withinCenterCorridor = (centerX >= _pathCorridorLeftX && centerX <= _pathCorridorRightX);
+
+    final bool bottomIsLowEnough = (bottomY >= _minBoxBottomY);
+
+    return withinCenterCorridor && bottomIsLowEnough;
+  }
+  // ---------------------------
 
   // ---------------------------
-  // Distance Estimation Config
+  // Distance Estimation Config (heights in feet)
   // ---------------------------
-  static const Map<String, double> _averageHeightsM = {
-  'door': 2.0,
-};
+  static const Map<String, double> _averageHeightsFeet = {
+    'person': 5.0,
+    'bottle': 0.8,
+    'dining table': 2.5,
+    'tv': 2.0,
+    'laptop': 0.6,
+    'door': 6,
+    'chair': 2.6
+  };
 
-  static const double _cameraVerticalFovDeg = 15.8;
+  static final double _cameraVerticalFovDeg = Platform.isIOS ? 70.0 : 120.0;
+
+  // Close range: raw readings often clamp ~2.5 ft; remap [2.5, 4] ft -> [1, 4] ft.
+  static const double _closeRangeThresholdFeet = 4.0;
+  static const double _closeRangeRawMin = 2.5;
+  static const double _closeRangeDisplayMin = 1.0;
 
   final FlutterTts _tts = FlutterTts();
 
@@ -48,18 +100,29 @@ class _ObjectDetectionScreenState
 
   String _statusText = "Scanning...";
 
-  DateTime _lastSpoken =
-      DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
 
-  static const Duration _minSpeakInterval =
-      Duration(seconds: 4);
+  static const Duration _minSpeakInterval = Duration(seconds: 2);
 
-  static const double _confidenceThreshold = 0.2;
+  // Separate cooldown for urgent "danger" warnings so we don't spam every frame.
+  DateTime _lastDangerSpoken = DateTime.fromMillisecondsSinceEpoch(0);
+  static const Duration _minDangerInterval = Duration(seconds: 2);
+
+  static const double _confidenceThreshold = 0.8;
 
   final List<String> onGroundObjects = [
-  'door'
-  
-];
+    'person',
+    'dining table',
+    'chair',
+    'dog',
+    'cat',
+    'bicycle',
+    'suitcase',
+    'couch',
+    'bed',
+    'bus',
+    'door'
+  ];
 
   @override
   void initState() {
@@ -102,8 +165,6 @@ class _ObjectDetectionScreenState
 
     final turningOn = !_detectionEnabled;
 
-    if (!mounted) return;
-
     setState(() {
       _detectionEnabled = turningOn;
     });
@@ -120,25 +181,24 @@ class _ObjectDetectionScreenState
     _toggleSpeaking = false;
   }
 
-  double? _estimateDistanceMeters(YOLOResult d) {
+  // Estimates distance in feet from average heights and pinhole model.
+  // Below _closeRangeThresholdFeet, remaps the clamped band so 1–4 ft reads correctly.
+  double? _estimateDistanceFeet(YOLOResult d) {
     final label = d.className.trim().toLowerCase();
-    final realHeight = _averageHeightsM[label];
-    if (realHeight == null) return null;
+    final realHeightFeet = _averageHeightsFeet[label];
+    if (realHeightFeet == null) return null;
 
     final boxHeightNorm = d.normalizedBox.height;
     if (boxHeightNorm <= 0) return null;
 
-    final fovRad =
-        _cameraVerticalFovDeg * math.pi / 180.0;
+    final fovRad = _cameraVerticalFovDeg * math.pi / 180.0;
 
-    final distance =
-        realHeight /
-            (2.0 *
-                boxHeightNorm *
-                math.tan(fovRad / 2.0));
+    final double rawFeet = realHeightFeet / (2.0 * boxHeightNorm * math.tan(fovRad / 2.0));
 
-    if (!distance.isFinite || distance <= 0) return null;
-    return distance;
+    if (!rawFeet.isFinite || rawFeet <= 0) return null;
+
+    // Return the raw geometric estimate so we can see true behavior on-device.
+    return rawFeet;
   }
 
   Future<void> _speakDetections(
@@ -146,115 +206,154 @@ class _ObjectDetectionScreenState
 
     if (_toggleSpeaking) return;
     if (!_detectionEnabled) return;
-    if (_isSpeaking) return;
     if (detections.isEmpty) return;
 
-    final now = DateTime.now();
-    if (now.difference(_lastSpoken) <
-        _minSpeakInterval) return;
+    // Pick ONE most urgent "ahead" object (dev urgency logic)
+    YOLOResult? mostUrgent;
+    double bestUrgencyScore = double.infinity; // smaller score = more urgent
+    double? chosenDistanceFeet;
 
-    final Map<String, int> counts = {};
-    final Map<String, List<double>> distances = {};
+    // Track any object that is within the "danger" distance threshold in front of the user.
+    YOLOResult? dangerObject;
+    double closestDangerDistance = double.infinity;
 
-    for (final d in detections) {
-      final label =
-          d.className.trim().toLowerCase();
+    for (final d in detections)
+    {
+      final label = d.className.trim().toLowerCase();
 
-      if (d.confidence < _confidenceThreshold)
-        continue;
+      if (d.confidence < _confidenceThreshold) continue;
 
-      if (!onGroundObjects.contains(label))
-        continue;
+      if (!onGroundObjects.contains(label)) continue;
 
-      counts[label] =
-          (counts[label] ?? 0) + 1;
+      if (!_isInPath(d)) continue;
 
-      final dist = _estimateDistanceMeters(d);
-      if (dist != null) {
-        (distances[label] ??= []).add(dist);
+      final distFeet = _estimateDistanceFeet(d);
+
+      if (distFeet != null)
+      {
+        // First, track any object that is inside our "danger" zone.
+        if (distFeet < _dangerDistanceFeet && distFeet < closestDangerDistance)
+        {
+          dangerObject = d;
+          closestDangerDistance = distFeet;
+        }
+
+        // Ignore non-dangerous objects that are too far away entirely.
+        if (distFeet > _maxAlertDistanceFeet) continue;
+
+        // Otherwise, keep the closest as the most urgent "regular" announcement.
+        if (distFeet < bestUrgencyScore)
+        {
+          mostUrgent = d;
+          bestUrgencyScore = distFeet;
+          chosenDistanceFeet = distFeet;
+        }
+      }
+      else
+      {
+        final boxHeight = d.normalizedBox.height;
+        if (boxHeight < _minBoxHeightForUnknownDistance) continue;
+
+        final proxyScore = 1.0 / boxHeight;
+
+        if (proxyScore < bestUrgencyScore)
+        {
+          mostUrgent = d;
+          bestUrgencyScore = proxyScore;
+          chosenDistanceFeet = null;
+        }
       }
     }
 
-    if (counts.isEmpty) return;
+    // If we have a very close object, immediately warn the user and bypass the normal speak interval.
+    if (dangerObject != null)
+    {
+      var label = dangerObject.className.trim().toLowerCase();
 
-    final List<String> parts = [];
-
-    counts.forEach((label, count) {
-      String spokenLabel;
-
-      if (count == 1) {
-        spokenLabel = label;
-      } else if (label == 'person') {
-        spokenLabel = 'people';
-      } else {
-        spokenLabel = '${label}s';
-      }
-
+      // do not overwrite or change these statements for dining table(s) to table(s) label conversion
       if (label == 'dining table') {
-        if (spokenLabel == 'dining tables') {
-          spokenLabel = 'tables';
-        } else {
-          spokenLabel = 'table';
-        }
+        label = 'table';
+      } else if (label == 'dining tables') {
+        label = 'tables';
+      }
+      
+      final String sentence = 'Warning, $label in front of you';
+
+      if (mounted) {
+        setState(() => _statusText = sentence);
       }
 
-      String phrase = '$count $spokenLabel';
+      final now = DateTime.now();
+      if (now.difference(_lastDangerSpoken) < _minDangerInterval) return;
 
-      final dists = distances[label];
-      if (dists != null && dists.isNotEmpty) {
-        final minDist = dists.reduce(math.min);
-        final rounded =
-            (minDist * 2).round() / 2.0;
+      _lastDangerSpoken = now;
+      _lastSpoken = now;
 
-        phrase +=
-            ' around ${rounded.toStringAsFixed(1)} meters away';
-      }
+      // Interrupt any current speech so the warning is heard immediately.
+      await _tts.stop();
+      _isSpeaking = false;
 
-      parts.add(phrase);
-    });
+      await _tts.speak(sentence);
+      return;
+    }
 
-    final sentence = parts.join(', ');
+    if (mostUrgent == null) return;
 
-    if (!mounted) return;
+    var label = mostUrgent.className.trim().toLowerCase();
 
-    if (_statusText != sentence) {
-      setState(() {
-        _statusText = sentence;
-      });
-}
+    // do not overwrite or change these statements for dining table(s) to table(s) label conversion
+    if (label == 'dining table') {
+      label = 'table';
+    } else if (label == 'dining tables') {
+      label = 'tables';
+    }
+
+    String sentence;
+    if (chosenDistanceFeet != null)
+    {
+      final roundedFeet = (chosenDistanceFeet! * 2).round() / 2.0;
+      sentence = '$label ahead, around ${roundedFeet.toStringAsFixed(1)} feet';
+    }
+    else
+    {
+      sentence = '$label ahead';
+    }
+
+    if (mounted) {
+      setState(() => _statusText = sentence);
+    }
+
+    if (_isSpeaking) return;
+    final now = DateTime.now();
+    if (now.difference(_lastSpoken) < _minSpeakInterval) return;
 
     _lastSpoken = now;
     await _tts.speak(sentence);
   }
 
   @override
-Widget build(BuildContext context) {
-  return Scaffold(
-    backgroundColor: Colors.black,
-    body: GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onDoubleTap: _toggleDetection, 
-      child: Stack(
+  Widget build(BuildContext context) {
+    // Enable GPU on iOS, disable on Android (especially emulators)
+    final bool useGpu = Platform.isIOS;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
         children: [
 
           YOLOView(
-            modelPath: 'door_model',
+            modelPath: 'yolo11n',
             task: YOLOTask.detect,
-            useGpu: false,
-            onResult: (results) {
-              print("RAW DETECTIONS: $results");
-              _speakDetections(results);
-            },
+            useGpu: useGpu,
+            onResult: _speakDetections,
           ),
 
-          // Pause overlay
           if (!_detectionEnabled)
             Container(
               color: Colors.black.withOpacity(0.6),
               child: const Center(
                 child: Text(
-                  'Detection Paused\nDouble tap to resume',
-                  textAlign: TextAlign.center,
+                  'Detection Paused',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 24,
@@ -264,7 +363,6 @@ Widget build(BuildContext context) {
               ),
             ),
 
-          // Status text
           Positioned(
             bottom: 150,
             left: 0,
@@ -275,17 +373,28 @@ Widget build(BuildContext context) {
               child: Text(
                 _statusText,
                 style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                ),
+                    color: Colors.white,
+                    fontSize: 16),
                 textAlign: TextAlign.center,
               ),
             ),
           ),
 
+          Positioned(
+            bottom: 60,
+            left: 40,
+            right: 40,
+            child: ElevatedButton(
+              onPressed: _toggleDetection,
+              child: Text(
+                _detectionEnabled
+                    ? 'Pause Detection'
+                    : 'Resume Detection',
+              ),
+            ),
+          ),
         ],
       ),
-    ),
-  );
+    );
+  }
 }
-    }

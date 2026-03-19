@@ -1,7 +1,11 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:vibration/vibration.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:ultralytics_yolo/yolo.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 
@@ -62,11 +66,24 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   // without speaking every single frame.
   DateTime _lastDangerSpoken = DateTime.fromMillisecondsSinceEpoch(0);
   static const Duration _minDangerInterval = Duration(seconds: 2);
+  static const int _dangerVibrationDurationMs = 250;
+
+  // Tilt vibration system
+  static const double _minTiltForHaptics = 0.12; // 0..1 tilt factor
+  static const Duration _minTiltVibrationInterval = Duration(milliseconds: 900);
+  static const int _tiltVibrationBaseDurationMs = 60;
+  static const int _tiltVibrationExtraDurationMs = 170;
+
+  // Tilt tracking (0 = upright, 1 = fully tilted).
+  StreamSubscription<AccelerometerEvent>? _accelerometerSub;
+  DateTime _lastTiltVibration = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _tiltVibrationSuppressedUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
   void initState() {
     super.initState();
     _initTts();
+    _initTiltTracking();
   }
 
   Future<void> _initTts() async {
@@ -104,8 +121,75 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
   @override
   void dispose() {
+    _accelerometerSub?.cancel();
     _tts.stop();
     super.dispose();
+  }
+
+  void _initTiltTracking() {
+    _accelerometerSub = accelerometerEventStream().listen(
+      (AccelerometerEvent event) {
+        final double ax = event.x;
+        final double ay = event.y;
+        final double az = event.z;
+
+        // Approximate forward/back tilt (pitch) in radians, -pi/2..pi/2.
+        final double pitch = math.atan2(-ax, math.sqrt(ay * ay + az * az));
+
+        const double maxTiltRad = math.pi / 2.0;
+        final double tilt = (pitch.abs() / maxTiltRad).clamp(0.0, 1.0);
+
+        _tryVibrateForTilt(tilt);
+      },
+      onError: (_) {
+        // If the sensor is unavailable, just don't vibrate for tilt.
+      },
+      cancelOnError: false,
+    );
+  }
+
+  void _tryVibrateForTilt(double tiltFactor) {
+    // If TTS is effectively disabled (we're "Detection off"), don't vibrate.
+    if (!_detectionEnabled) {
+      return;
+    }
+    if (_toggleSpeaking) {
+      return;
+    }
+
+    if (tiltFactor < _minTiltForHaptics) {
+      return;
+    }
+
+    final DateTime now = DateTime.now();
+    if (now.isBefore(_tiltVibrationSuppressedUntil)) {
+      return;
+    }
+
+    // Avoid overlapping tilt haptics with any current TTS output.
+    if (_isSpeaking) {
+      return;
+    }
+
+    if (now.difference(_lastTiltVibration) < _minTiltVibrationInterval) {
+      return;
+    }
+
+    _lastTiltVibration = now;
+
+    // Stronger tilt => longer vibration (and more intense on Android/iOS).
+    final int duration = (_tiltVibrationBaseDurationMs + tiltFactor * _tiltVibrationExtraDurationMs).round();
+    final int amplitude = (50 + tiltFactor * (255 - 50)).round().clamp(1, 255);
+    final double sharpness = (0.2 + tiltFactor * 0.8).clamp(0.0, 1.0);
+
+    // Fire-and-forget to keep sensor updates responsive.
+    unawaited(
+      Vibration.vibrate(
+        duration: duration,
+        amplitude: amplitude,
+        sharpness: sharpness,
+      ),
+    );
   }
 
   Future<void> _toggleDetection() async {
@@ -120,6 +204,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       _detectionEnabled = turningOn;
     });
 
+    // Prevent any pending tilt haptics from firing right after toggling.
+    _tiltVibrationSuppressedUntil = DateTime.now().add(const Duration(milliseconds: 500));
+
     await Future.delayed(const Duration(milliseconds: 150));
     await _tts.speak(turningOn ? 'Detection on' : 'Detection off');
 
@@ -130,6 +217,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     _lastSpokenNormalSummaryKey = '';
     _lastTimeHadAnyGroups = DateTime.fromMillisecondsSinceEpoch(0);
     _pathClearAnnouncedSinceLastObjects = false;
+    _lastTiltVibration = DateTime.fromMillisecondsSinceEpoch(0);
+    _tiltVibrationSuppressedUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
     _toggleSpeaking = false;
   }
@@ -198,6 +287,14 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       // Danger alerts are allowed to interrupt current speech.
       await _tts.stop();
       _isSpeaking = false;
+
+      if (await Vibration.hasVibrator()) {
+        await Vibration.vibrate(duration: _dangerVibrationDurationMs);
+      }
+
+      // Pause tilt haptics briefly so the two vibration systems don't overlap.
+      _tiltVibrationSuppressedUntil = now.add(const Duration(milliseconds: 700));
+
       await _tts.speak(decision.spokenText);
       return;
     }

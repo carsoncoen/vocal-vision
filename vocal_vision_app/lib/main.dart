@@ -79,11 +79,21 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   DateTime _lastTiltVibration = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _tiltVibrationSuppressedUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
+  bool _hasVibrator = false;
+
   @override
   void initState() {
     super.initState();
     _initTts();
     _initTiltTracking();
+    _initHaptics();
+  }
+
+  void _initHaptics() {
+    Vibration.hasVibrator().then((bool value) {
+      if (!mounted) return;
+      setState(() => _hasVibrator = value);
+    });
   }
 
   Future<void> _initTts() async {
@@ -182,7 +192,11 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     final int amplitude = (50 + tiltFactor * (255 - 50)).round().clamp(1, 255);
     final double sharpness = (0.2 + tiltFactor * 0.8).clamp(0.0, 1.0);
 
-    // Fire-and-forget to keep sensor updates responsive.
+    if (!_hasVibrator) {
+      return;
+    }
+
+    print('Vibrating for tilt: $duration ms, $amplitude, $sharpness');
     unawaited(
       Vibration.vibrate(
         duration: duration,
@@ -288,7 +302,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       await _tts.stop();
       _isSpeaking = false;
 
-      if (await Vibration.hasVibrator()) {
+      print('Vibrating for danger: ${_dangerVibrationDurationMs} ms');
+      if (_hasVibrator) {
         await Vibration.vibrate(duration: _dangerVibrationDurationMs);
       }
 

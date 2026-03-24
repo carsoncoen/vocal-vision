@@ -69,10 +69,11 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   //static const int _dangerVibrationDurationMs = 250;
 
   // Tilt vibration system
-  static const double _minTiltForHaptics = 0.25;
+  static const double _minTiltForHapticsDeg = 30.0;
+  static const double _maxTiltForHapticsDeg = 90.0;
   static const Duration _minTiltVibrationInterval = Duration(milliseconds: 900);
-  static const int _tiltVibrationBaseDurationMs = 60;
-  static const int _tiltVibrationExtraDurationMs = 170;
+  static const int _tiltVibrationBaseDurationMs = 200;
+  static const int _tiltVibrationExtraDurationMs = 220;
 
   // Tilt tracking (0 = upright, 1 = flat/fully tilted).
   StreamSubscription<AccelerometerEvent>? _accelerometerSub;
@@ -155,11 +156,11 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
         final double cosTheta = (ay.abs() / gravityMagnitude).clamp(0.0, 1.0);
         final double tiltRadians = math.acos(cosTheta); // 0..pi/2
-        final double tilt = (tiltRadians / (math.pi / 2.0)).clamp(0.0, 1.0);
         final double tiltDegrees = tiltRadians * 180.0 / math.pi;
+        final double tilt = (tiltRadians / (math.pi / 2.0)).clamp(0.0, 1.0);
         print('Tilt: ${tilt.toStringAsFixed(3)} (${tiltDegrees.toStringAsFixed(1)} deg)');
 
-        _tryVibrateForTilt(tilt);
+        _tryVibrateForTilt(tiltDegrees);
       },
       onError: (_) {
         // If the sensor is unavailable, just don't vibrate for tilt.
@@ -168,7 +169,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     );
   }
 
-  void _tryVibrateForTilt(double tiltFactor) {
+  void _tryVibrateForTilt(double tiltDegrees) {
     // If TTS is effectively disabled (we're "Detection off"), don't vibrate.
     if (!_detectionEnabled) {
       return;
@@ -177,7 +178,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       return;
     }
 
-    if (tiltFactor < _minTiltForHaptics) {
+    if (tiltDegrees < _minTiltForHapticsDeg) {
       return;
     }
 
@@ -197,16 +198,25 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
     _lastTiltVibration = now;
 
-    // Stronger tilt => longer vibration (and more intense on Android/iOS).
-    final int duration = (_tiltVibrationBaseDurationMs + tiltFactor * _tiltVibrationExtraDurationMs).round();
-    final int amplitude = (50 + tiltFactor * (255 - 50)).round().clamp(1, 255);
-    final double sharpness = (0.2 + tiltFactor * 0.8).clamp(0.0, 1.0);
+    // Convert degrees above threshold into a 0..1 progression.
+    final double rawProgress = ((tiltDegrees - _minTiltForHapticsDeg) / (_maxTiltForHapticsDeg - _minTiltForHapticsDeg)).clamp(0.0, 1.0);
+    
+    // Ease-out makes early increases (e.g., +15 deg) feel meaningfully stronger.
+    final double hapticProgress = 1.0 - math.pow(1.0 - rawProgress, 3).toDouble();
+
+    // Duration: 200ms at threshold, then ramps aggressively with tilt.
+    final int duration = (_tiltVibrationBaseDurationMs + hapticProgress * _tiltVibrationExtraDurationMs).round();
+    final int amplitude = (90 + hapticProgress * (255 - 90)).round().clamp(1, 255);
+    final double sharpness = (0.35 + hapticProgress * 0.65).clamp(0.0, 1.0);
 
     if (!_hasVibrator) {
       return;
     }
 
-    print('Vibrating for tilt: $duration ms, $amplitude, $sharpness');
+    print(
+      'Vibrating for tilt: ${tiltDegrees.toStringAsFixed(1)} deg -> '
+      '$duration ms, $amplitude, $sharpness',
+    );
     unawaited(
       Vibration.vibrate(
         duration: duration,

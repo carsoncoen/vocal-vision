@@ -66,10 +66,10 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   // without speaking every single frame.
   DateTime _lastDangerSpoken = DateTime.fromMillisecondsSinceEpoch(0);
   static const Duration _minDangerInterval = Duration(seconds: 2);
-  static const int _dangerVibrationDurationMs = 250;
+  //static const int _dangerVibrationDurationMs = 250;
 
   // Tilt vibration system
-  static const double _minTiltForHaptics = 0.12;
+  static const double _minTiltForHaptics = 0.25;
   static const Duration _minTiltVibrationInterval = Duration(milliseconds: 900);
   static const int _tiltVibrationBaseDurationMs = 60;
   static const int _tiltVibrationExtraDurationMs = 170;
@@ -312,10 +312,10 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       await _tts.stop();
       _isSpeaking = false;
 
-      print('Vibrating for danger: ${_dangerVibrationDurationMs} ms');
-      if (_hasVibrator) {
-        await Vibration.vibrate(duration: _dangerVibrationDurationMs);
-      }
+      // print('Vibrating for danger: ${_dangerVibrationDurationMs} ms');
+      // if (_hasVibrator) {
+      //   await Vibration.vibrate(duration: _dangerVibrationDurationMs);
+      // }
 
       // Pause tilt haptics briefly so the two vibration systems don't overlap.
       _tiltVibrationSuppressedUntil = now.add(const Duration(milliseconds: 700));

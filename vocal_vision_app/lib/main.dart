@@ -69,12 +69,12 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   static const int _dangerVibrationDurationMs = 250;
 
   // Tilt vibration system
-  static const double _minTiltForHaptics = 0.12; // 0..1 tilt factor
+  static const double _minTiltForHaptics = 0.12;
   static const Duration _minTiltVibrationInterval = Duration(milliseconds: 900);
   static const int _tiltVibrationBaseDurationMs = 60;
   static const int _tiltVibrationExtraDurationMs = 170;
 
-  // Tilt tracking (0 = upright, 1 = fully tilted).
+  // Tilt tracking (0 = upright, 1 = flat/fully tilted).
   StreamSubscription<AccelerometerEvent>? _accelerometerSub;
   DateTime _lastTiltVibration = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _tiltVibrationSuppressedUntil = DateTime.fromMillisecondsSinceEpoch(0);
@@ -143,11 +143,21 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
         final double ay = event.y;
         final double az = event.z;
 
-        // Approximate forward/back tilt (pitch) in radians, -pi/2..pi/2.
-        final double pitch = math.atan2(-ax, math.sqrt(ay * ay + az * az));
+        // Compute a true "upright -> flat" angle using gravity magnitude:
+        // - 0 deg when gravity aligns with device Y axis (phone upright)
+        // - 90 deg when gravity is perpendicular to Y axis (phone flat)
+        // This avoids the previous behavior where values could rise and then
+        // fall again for some rotation planes.
+        final double gravityMagnitude = math.sqrt((ax * ax) + (ay * ay) + (az * az));
+        if (gravityMagnitude <= 0) {
+          return;
+        }
 
-        const double maxTiltRad = math.pi / 2.0;
-        final double tilt = (pitch.abs() / maxTiltRad).clamp(0.0, 1.0);
+        final double cosTheta = (ay.abs() / gravityMagnitude).clamp(0.0, 1.0);
+        final double tiltRadians = math.acos(cosTheta); // 0..pi/2
+        final double tilt = (tiltRadians / (math.pi / 2.0)).clamp(0.0, 1.0);
+        final double tiltDegrees = tiltRadians * 180.0 / math.pi;
+        print('Tilt: ${tilt.toStringAsFixed(3)} (${tiltDegrees.toStringAsFixed(1)} deg)');
 
         _tryVibrateForTilt(tilt);
       },

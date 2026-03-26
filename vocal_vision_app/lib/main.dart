@@ -45,6 +45,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
   String _statusText = 'Scanning...';
 
+  // Holds the exact sentence that is about to be spoken.
+  String _pendingSpokenText = '';
+
   DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
   static const Duration _minSpeakInterval = Duration(seconds: 3);
 
@@ -79,22 +82,45 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       if (!mounted) {
         return;
       }
-      setState(() => _isSpeaking = true);
+
+      setState(() {
+        _isSpeaking = true;
+
+        // Synchronize the written text with the exact moment speech starts.
+        // This keeps the bottom text aligned with actual audio output,
+        // even if the speech rate changes later.
+        if (_pendingSpokenText.isNotEmpty) {
+          _statusText = _pendingSpokenText;
+        }
+      });
     });
 
     _tts.setCompletionHandler(() {
       if (!mounted) {
         return;
       }
-      setState(() => _isSpeaking = false);
+
+      setState(() {
+        _isSpeaking = false;
+
+        // Clear the pending text once this utterance is finished.
+        _pendingSpokenText = '';
+      });
     });
 
     _tts.setErrorHandler((_) {
       if (!mounted) {
         return;
       }
-      setState(() => _isSpeaking = false);
+
+      setState(() {
+        _isSpeaking = false;
+
+        // Also clear pending text if TTS fails.
+        _pendingSpokenText = '';
+      });
     });
+
   }
 
   @override
@@ -116,7 +142,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     });
 
     await Future.delayed(const Duration(milliseconds: 150));
-    await _tts.speak(turningOn ? 'Detection on' : 'Detection off');
+    await _speakSynchronized(turningOn ? 'Detection on' : 'Detection off');
 
     await Future.delayed(const Duration(milliseconds: 400));
 
@@ -125,6 +151,25 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     _lastSpokenNormalSummaryKey = '';
 
     _toggleSpeaking = false;
+  }
+
+  /// Speaks one sentence and keeps the on-screen text synchronized with
+  /// the exact moment speech actually begins.
+  ///
+  /// Why this helper exists:
+  /// - We store the next utterance in _pendingSpokenText
+  /// - The TTS start handler copies that text into _statusText
+  /// - So the visible text changes when audio starts, not earlier
+  Future<void> _speakSynchronized(String text) async {
+    if (text.isEmpty) {
+      return;
+    }
+
+    // Store the exact text that is about to be spoken.
+    // The TTS start callback will move this into _statusText.
+    _pendingSpokenText = text;
+
+    await _tts.speak(text);
   }
 
   /// Handles the full detection-to-announcement flow.
@@ -146,10 +191,6 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     }
 
     final AnnouncementDecision decision = _announcementEngine.processDetections(detections);
-
-    if (decision.statusText.isNotEmpty && mounted && _statusText != decision.statusText) {
-      setState(() => _statusText = decision.statusText);
-    }
 
     // If nothing stable is active anymore, clear the remembered normal summary
     // so it can be spoken again if it later reappears.
@@ -175,7 +216,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       // Danger alerts are allowed to interrupt current speech.
       await _tts.stop();
       _isSpeaking = false;
-      await _tts.speak(decision.spokenText);
+
+      // Keep the visible text synchronized with the actual start of speech.
+      await _speakSynchronized(decision.spokenText);
       return;
     }
 
@@ -203,7 +246,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
     _lastSpoken = now;
     _lastSpokenNormalSummaryKey = decision.summaryKey;
-    await _tts.speak(decision.spokenText);
+
+    // Keep the visible text synchronized with the actual start of speech.
+    await _speakSynchronized(decision.spokenText);
   }
 
   @override

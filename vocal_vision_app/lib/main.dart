@@ -147,8 +147,6 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
         // Compute a true "upright -> flat" angle using gravity magnitude:
         // - 0 deg when gravity aligns with device Y axis (phone upright)
         // - 90 deg when gravity is perpendicular to Y axis (phone flat)
-        // This avoids the previous behavior where values could rise and then
-        // fall again for some rotation planes.
         final double gravityMagnitude = math.sqrt((ax * ax) + (ay * ay) + (az * az));
         if (gravityMagnitude <= 0) {
           return;
@@ -184,11 +182,6 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
     final DateTime now = DateTime.now();
     if (now.isBefore(_tiltVibrationSuppressedUntil)) {
-      return;
-    }
-
-    // Avoid overlapping tilt haptics with any current TTS output.
-    if (_isSpeaking) {
       return;
     }
 

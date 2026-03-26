@@ -37,6 +37,8 @@ dependencies:
   camera: ^0.11.3+1
   flutter_vision: ^2.0.0
   flutter_tts: ^3.8.3
+  vibration: ^3.1.8
+  sensors_plus: ^7.0.0
   ultralytics_yolo: ^0.2.0
   image_picker: ^0.8.7
 

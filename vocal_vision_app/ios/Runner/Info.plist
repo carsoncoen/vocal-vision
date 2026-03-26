@@ -47,5 +47,7 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>We need camera access to detect objects</string>
+	<key>NSMotionUsageDescription</key>
+	<string>This app uses motion data to understand phone tilt for accessibility feedback.</string>
 </dict>
 </plist>

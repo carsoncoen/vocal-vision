@@ -62,7 +62,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
   // Normal reminders are repeated at a controlled interval while the same
   // stable summary remains active.
-  static const Duration _normalRepeatInterval = Duration(seconds: 4);
+  static const Duration _normalRepeatInterval = Duration(seconds: 3);
   String _lastSpokenNormalSummaryKey = '';
 
   // Separate cooldown for urgent warnings so they can bypass normal summary timing
@@ -84,6 +84,15 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   DateTime _tiltVibrationSuppressedUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool _hasVibrator = false;
+
+  // -------------------- Debug: callback FPS --------------------
+  // Counts how many YOLO result callbacks happen in the current time window.
+  // We use this to estimate how often Dart receives fresh detection results.
+  int _debugCallbackCount = 0;
+
+  // Marks the beginning of the current FPS measurement window.
+  // About once per second, we print the average callback rate and reset.
+  DateTime _debugCallbackWindowStart = DateTime.now();
 
   @override
   void initState() {
@@ -295,6 +304,30 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     await _tts.speak(text);
   }
 
+  /// Prints approximate YOLO callback FPS once per second.
+  ///
+  /// Important:
+  /// This is callback FPS, not screen-render FPS.
+  /// It tells us how often the YOLO plugin is calling _handleDetections()
+  /// with fresh results. That is the number we care about for awareness timing.
+  void _debugLogCallbackFps() {
+    _debugCallbackCount++;
+
+    final DateTime now = DateTime.now();
+    final int elapsedMs = now.difference(_debugCallbackWindowStart).inMilliseconds;
+
+    // Print about once every second so the console stays readable.
+    if (elapsedMs >= 1000) {
+      final double callbackFps = _debugCallbackCount * 1000 / elapsedMs;
+
+      print('[DEBUG] YOLO callback FPS: ${callbackFps.toStringAsFixed(1)}');
+
+      // Reset for the next measurement window.
+      _debugCallbackCount = 0;
+      _debugCallbackWindowStart = now;
+    }
+  }
+
   /// Handles the full detection-to-announcement flow.
   ///
   /// The awareness engine decides what the current stable summary is. This
@@ -305,6 +338,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   /// - keep repeating the same summary at a controlled interval
   /// - stop repeating when the path clears
   Future<void> _handleDetections(List<YOLOResult> detections) async {
+    _debugLogCallbackFps();
+    
     if (_toggleSpeaking) {
       return;
     }

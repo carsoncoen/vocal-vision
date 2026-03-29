@@ -115,8 +115,8 @@ class AwarenessConfig {
         'door',
       ],
       
-      //cameraVerticalFovDeg: Platform.isIOS ? 70.0 : 120.0,
-      cameraVerticalFovDeg: 120.0,
+      //cameraVerticalFovDeg: 70.0, // Android
+      cameraVerticalFovDeg: 120.0, // IOS
     );
   }
 }

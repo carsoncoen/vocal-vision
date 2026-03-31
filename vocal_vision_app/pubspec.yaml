@@ -41,6 +41,7 @@ dependencies:
   sensors_plus: ^7.0.0
   ultralytics_yolo: ^0.2.0
   image_picker: ^0.8.7
+  permission_handler: ^11.3.1
 
 dev_dependencies:
   flutter_test:

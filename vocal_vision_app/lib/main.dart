@@ -11,6 +11,7 @@ import 'package:ultralytics_yolo/yolo_view.dart';
 
 import 'awareness/announcement_engine.dart';
 import 'awareness/awareness_models.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 // Main entry point
 void main() => runApp(const YOLODemo());
@@ -85,9 +86,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   @override
   void initState() {
     super.initState();
-    _initTts();
-    _initTiltTracking();
-    _initHaptics();
+    _initApp();
   }
 
   void _initHaptics() {
@@ -129,6 +128,30 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       setState(() => _isSpeaking = false);
     });
   }
+
+  Future<void> _initApp() async {
+  // Request the camera permission
+  PermissionStatus status = await Permission.camera.request();
+
+  if (status.isGranted) {
+    _initTts();
+    _initTiltTracking();
+    _initHaptics();
+    
+    if (mounted) {
+      setState(() => _statusText = 'Scanning...');
+    }
+  } else if (status.isPermanentlyDenied) {
+    if (mounted) {
+      setState(() => _statusText = 'Camera denied. Please enable in Settings.');
+    }
+    await openAppSettings();
+  } else {
+    if (mounted) {
+      setState(() => _statusText = 'Camera access is required for detection.');
+    }
+  }
+}
 
   @override
   void dispose() {

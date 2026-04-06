@@ -46,6 +46,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   bool _isSpeaking = false;
   bool _detectionEnabled = true;
   bool _toggleSpeaking = false;
+  bool _speechInFlight = false;
 
   String _statusText = 'Scanning...';
 
@@ -145,6 +146,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       setState(() {
         _isSpeaking = false;
 
+        // The request is fully finished now, so future speech can be scheduled.
+        _speechInFlight = false;
+
         // Clear the pending text once this utterance is finished.
         _pendingSpokenText = '';
       });
@@ -157,6 +161,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
       setState(() {
         _isSpeaking = false;
+
+        // Release the in-flight lock if TTS fails so the app can recover.
+        _speechInFlight = false;
 
         // Also clear pending text if TTS fails.
         _pendingSpokenText = '';
@@ -260,6 +267,11 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     await _tts.stop();
     _isSpeaking = false;
 
+    // Toggling detection is a hard reset for speech state, so clear any
+    // pending request that may not have started yet.
+    _speechInFlight = false;
+    _pendingSpokenText = '';
+
     final bool turningOn = !_detectionEnabled;
 
     setState(() {
@@ -296,6 +308,15 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     if (text.isEmpty) {
       return;
     }
+
+    // This lock covers the small gap between calling _tts.speak() and the
+    // moment the TTS start callback fires. Without it, another detection
+    // callback can slip in and schedule overlapping speech.
+    if (_speechInFlight) {
+      return;
+    }
+
+    _speechInFlight = true;
 
     // Store the exact text that is about to be spoken.
     // The TTS start callback will move this into _statusText.
@@ -357,9 +378,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       _pathClearAnnouncedSinceLastObjects = false;
     }
 
-    if (decision.statusText.isNotEmpty && mounted && _statusText != decision.statusText) {
-      setState(() => _statusText = decision.statusText);
-    }
+    // Do not update the bottom status text directly from live detection output.
+    // We only want the visible text to change when speech actually starts,
+    // which happens in the TTS start callback using _pendingSpokenText.
 
     // If nothing stable is active anymore, clear the remembered normal summary
     // so it can be spoken again if it later reappears.
@@ -367,13 +388,16 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       _lastSpokenNormalSummaryKey = '';
 
       final bool thresholdPassed = now.difference(_lastTimeHadAnyGroups) >= _pathClearThreshold;
-      if (thresholdPassed && !_pathClearAnnouncedSinceLastObjects && !_isSpeaking) {
+      if (thresholdPassed &&
+          !_pathClearAnnouncedSinceLastObjects &&
+          !_isSpeaking &&
+          !_speechInFlight) {
         _pathClearAnnouncedSinceLastObjects = true;
         _lastSpoken = now;
-        if (mounted && _statusText != 'Path Clear') {
-          setState(() => _statusText = 'Path Clear');
-        }
-        await _tts.speak('Path Clear');
+
+        // Route "Path Clear" through the same synchronized speech helper so
+        // its visible text changes at the exact moment audio begins.
+        await _speakSynchronized('Path Clear');
       }
 
       return;
@@ -394,6 +418,11 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       // Danger alerts are allowed to interrupt current speech.
       await _tts.stop();
       _isSpeaking = false;
+
+      // Clear any previously pending normal utterance so the warning can take
+      // over immediately, even if the old speech had not started yet.
+      _speechInFlight = false;
+      _pendingSpokenText = '';
 
       // print('Vibrating for danger: ${_dangerVibrationDurationMs} ms');
       // if (_hasVibrator) {
@@ -423,7 +452,10 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       return;
     }
 
-    if (_isSpeaking) {
+    // Normal announcements should not stack. We block both while audio is
+    // actively speaking and during the short pre-start window after a speak
+    // request has already been sent.
+    if (_isSpeaking || _speechInFlight) {
       return;
     }
 

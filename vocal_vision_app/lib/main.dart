@@ -54,7 +54,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   String _pendingSpokenText = '';
 
   DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _minSpeakInterval = Duration(seconds: 3);
+  static const Duration _minSpeakInterval = Duration(seconds: 1);
 
   // "Path Clear" announcement when no objects persist.
   static const Duration _pathClearThreshold = Duration(milliseconds: 500);

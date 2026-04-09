@@ -47,11 +47,15 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   bool _isSpeaking = false;
   bool _detectionEnabled = true;
   bool _toggleSpeaking = false;
+  bool _speechInFlight = false;
 
   String _statusText = 'Scanning...';
 
+  // Holds the exact sentence that is about to be spoken.
+  String _pendingSpokenText = '';
+
   DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _minSpeakInterval = Duration(seconds: 3);
+  static const Duration _minSpeakInterval = Duration(seconds: 1);
 
   // "Path Clear" announcement when no objects persist.
   static const Duration _pathClearThreshold = Duration(milliseconds: 500);
@@ -60,7 +64,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
   // Normal reminders are repeated at a controlled interval while the same
   // stable summary remains active.
-  static const Duration _normalRepeatInterval = Duration(seconds: 4);
+  static const Duration _normalRepeatInterval = Duration(seconds: 3);
   String _lastSpokenNormalSummaryKey = '';
 
   // Separate cooldown for urgent warnings so they can bypass normal summary timing
@@ -82,6 +86,15 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   DateTime _tiltVibrationSuppressedUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool _hasVibrator = false;
+
+  // -------------------- Debug: callback FPS --------------------
+  // Counts how many YOLO result callbacks happen in the current time window.
+  // We use this to estimate how often Dart receives fresh detection results.
+  int _debugCallbackCount = 0;
+
+  // Marks the beginning of the current FPS measurement window.
+  // About once per second, we print the average callback rate and reset.
+  DateTime _debugCallbackWindowStart = DateTime.now();
 
   @override
   void initState() {
@@ -111,22 +124,51 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       if (!mounted) {
         return;
       }
-      setState(() => _isSpeaking = true);
+
+      setState(() {
+        _isSpeaking = true;
+
+        // Synchronize the written text with the exact moment speech starts.
+        // This keeps the bottom text aligned with actual audio output,
+        // even if the speech rate changes later.
+        if (_pendingSpokenText.isNotEmpty) {
+          _statusText = _pendingSpokenText;
+        }
+      });
     });
 
     _tts.setCompletionHandler(() {
       if (!mounted) {
         return;
       }
-      setState(() => _isSpeaking = false);
+
+      setState(() {
+        _isSpeaking = false;
+
+        // The request is fully finished now, so future speech can be scheduled.
+        _speechInFlight = false;
+
+        // Clear the pending text once this utterance is finished.
+        _pendingSpokenText = '';
+      });
     });
 
     _tts.setErrorHandler((_) {
       if (!mounted) {
         return;
       }
-      setState(() => _isSpeaking = false);
+
+      setState(() {
+        _isSpeaking = false;
+
+        // Release the in-flight lock if TTS fails so the app can recover.
+        _speechInFlight = false;
+
+        // Also clear pending text if TTS fails.
+        _pendingSpokenText = '';
+      });
     });
+
   }
 
   Future<void> _initApp() async {
@@ -248,6 +290,11 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     await _tts.stop();
     _isSpeaking = false;
 
+    // Toggling detection is a hard reset for speech state, so clear any
+    // pending request that may not have started yet.
+    _speechInFlight = false;
+    _pendingSpokenText = '';
+
     final bool turningOn = !_detectionEnabled;
 
     setState(() {
@@ -258,7 +305,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     _tiltVibrationSuppressedUntil = DateTime.now().add(const Duration(milliseconds: 500));
 
     await Future.delayed(const Duration(milliseconds: 150));
-    await _tts.speak(turningOn ? 'Detection on' : 'Detection off');
+    await _speakSynchronized(turningOn ? 'Detection on' : 'Detection off');
 
     await Future.delayed(const Duration(milliseconds: 400));
 
@@ -273,6 +320,58 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     _toggleSpeaking = false;
   }
 
+  /// Speaks one sentence and keeps the on-screen text synchronized with
+  /// the exact moment speech actually begins.
+  ///
+  /// Why this helper exists:
+  /// - We store the next utterance in _pendingSpokenText
+  /// - The TTS start handler copies that text into _statusText
+  /// - So the visible text changes when audio starts, not earlier
+  Future<void> _speakSynchronized(String text) async {
+    if (text.isEmpty) {
+      return;
+    }
+
+    // This lock covers the small gap between calling _tts.speak() and the
+    // moment the TTS start callback fires. Without it, another detection
+    // callback can slip in and schedule overlapping speech.
+    if (_speechInFlight) {
+      return;
+    }
+
+    _speechInFlight = true;
+
+    // Store the exact text that is about to be spoken.
+    // The TTS start callback will move this into _statusText.
+    _pendingSpokenText = text;
+
+    await _tts.speak(text);
+  }
+
+  /// Prints approximate YOLO callback FPS once per second.
+  ///
+  /// Important:
+  /// This is callback FPS, not screen-render FPS.
+  /// It tells us how often the YOLO plugin is calling _handleDetections()
+  /// with fresh results. That is the number we care about for awareness timing.
+  void _debugLogCallbackFps() {
+    _debugCallbackCount++;
+
+    final DateTime now = DateTime.now();
+    final int elapsedMs = now.difference(_debugCallbackWindowStart).inMilliseconds;
+
+    // Print about once every second so the console stays readable.
+    if (elapsedMs >= 1000) {
+      final double callbackFps = _debugCallbackCount * 1000 / elapsedMs;
+
+      print('[DEBUG] YOLO callback FPS: ${callbackFps.toStringAsFixed(1)}');
+
+      // Reset for the next measurement window.
+      _debugCallbackCount = 0;
+      _debugCallbackWindowStart = now;
+    }
+  }
+
   /// Handles the full detection-to-announcement flow.
   ///
   /// The awareness engine decides what the current stable summary is. This
@@ -283,6 +382,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   /// - keep repeating the same summary at a controlled interval
   /// - stop repeating when the path clears
   Future<void> _handleDetections(List<YOLOResult> detections) async {
+    _debugLogCallbackFps();
+    
     if (_toggleSpeaking) {
       return;
     }
@@ -300,9 +401,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       _pathClearAnnouncedSinceLastObjects = false;
     }
 
-    if (decision.statusText.isNotEmpty && mounted && _statusText != decision.statusText) {
-      setState(() => _statusText = decision.statusText);
-    }
+    // Do not update the bottom status text directly from live detection output.
+    // We only want the visible text to change when speech actually starts,
+    // which happens in the TTS start callback using _pendingSpokenText.
 
     // If nothing stable is active anymore, clear the remembered normal summary
     // so it can be spoken again if it later reappears.
@@ -310,13 +411,16 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       _lastSpokenNormalSummaryKey = '';
 
       final bool thresholdPassed = now.difference(_lastTimeHadAnyGroups) >= _pathClearThreshold;
-      if (thresholdPassed && !_pathClearAnnouncedSinceLastObjects && !_isSpeaking) {
+      if (thresholdPassed &&
+          !_pathClearAnnouncedSinceLastObjects &&
+          !_isSpeaking &&
+          !_speechInFlight) {
         _pathClearAnnouncedSinceLastObjects = true;
         _lastSpoken = now;
-        if (mounted && _statusText != 'Path Clear') {
-          setState(() => _statusText = 'Path Clear');
-        }
-        await _tts.speak('Path Clear');
+
+        // Route "Path Clear" through the same synchronized speech helper so
+        // its visible text changes at the exact moment audio begins.
+        await _speakSynchronized('Path Clear');
       }
 
       return;
@@ -338,6 +442,11 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       await _tts.stop();
       _isSpeaking = false;
 
+      // Clear any previously pending normal utterance so the warning can take
+      // over immediately, even if the old speech had not started yet.
+      _speechInFlight = false;
+      _pendingSpokenText = '';
+
       // print('Vibrating for danger: ${_dangerVibrationDurationMs} ms');
       // if (_hasVibrator) {
       //   await Vibration.vibrate(duration: _dangerVibrationDurationMs);
@@ -346,7 +455,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       // Pause tilt haptics briefly so the two vibration systems don't overlap.
       _tiltVibrationSuppressedUntil = now.add(const Duration(milliseconds: 700));
 
-      await _tts.speak(decision.spokenText);
+
+      // Keep the visible text synchronized with the actual start of speech.
+      await _speakSynchronized(decision.spokenText);
       return;
     }
 
@@ -364,7 +475,10 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       return;
     }
 
-    if (_isSpeaking) {
+    // Normal announcements should not stack. We block both while audio is
+    // actively speaking and during the short pre-start window after a speak
+    // request has already been sent.
+    if (_isSpeaking || _speechInFlight) {
       return;
     }
 
@@ -374,7 +488,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
     _lastSpoken = now;
     _lastSpokenNormalSummaryKey = decision.summaryKey;
-    await _tts.speak(decision.spokenText);
+
+    // Keep the visible text synchronized with the actual start of speech.
+    await _speakSynchronized(decision.spokenText);
   }
 
   @override

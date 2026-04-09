@@ -90,13 +90,32 @@ class AnnouncementEngine
       );
     }
 
-    // Stage 5: Build the final normal summary.
+    // Stage 5: Apply the final object budget.
+    //
+    // The ranked stable list above is still group-based, but product behavior
+    // needs to cap the spoken result by real objects, not by number of groups.
+    // So we keep only the top N detections across the stable ranking, then
+    // regroup them for compact speech such as "2 chairs right, chair left".
+    final List<CandidateGroup> spokenGroups = _selectTopGroupsWithinObjectBudget(stableTopGroups);
+    if (spokenGroups.isEmpty) {
+      return AnnouncementDecision(
+        type: AnnouncementType.none,
+        spokenText: '',
+        statusText: _buildPreviewStatus(stableTopGroups),
+        shouldSpeak: false,
+        shouldInterrupt: false,
+        summaryKey: '',
+        topGroups: stableTopGroups,
+      );
+    }
+
+    // Stage 6: Build the final normal summary.
     //
     // The engine always returns the latest stable summary key so the UI layer
     // can decide when to speak it immediately and when to repeat it at a
     // controlled interval.
-    final String spokenText = _buildNormalSentence(stableTopGroups);
-    final String summaryKey = _buildSummaryKey(stableTopGroups);
+    final String spokenText = _buildNormalSentence(spokenGroups);
+    final String summaryKey = _buildSummaryKey(spokenGroups);
 
     return AnnouncementDecision(
       type: AnnouncementType.normal,
@@ -105,7 +124,7 @@ class AnnouncementEngine
       shouldSpeak: true,
       shouldInterrupt: false,
       summaryKey: summaryKey,
-      topGroups: stableTopGroups,
+      topGroups: spokenGroups,
     );
   }
 
@@ -589,7 +608,61 @@ class AnnouncementEngine
       return <CandidateGroup>[];
     }
 
-    return stableGroups.take(_config.maxNormalGroupsToSpeak).toList();
+    return stableGroups;
+  }
+
+
+
+  /// Applies the final object budget to an already ranked group list.
+  ///
+  /// Why this exists:
+  /// - ranking/stability are easier to manage at the group level
+  /// - product behavior should cap announcements by real objects, not groups
+  /// - so we take the top N candidates across the ranked groups, then regroup
+  ///   them into compact spoken phrases
+  List<CandidateGroup> _selectTopGroupsWithinObjectBudget(List<CandidateGroup> rankedGroups)
+  {
+    if (rankedGroups.isEmpty) {
+      return <CandidateGroup>[];
+    }
+
+    final List<DetectionCandidate> selectedCandidates = <DetectionCandidate>[];
+
+    for (final CandidateGroup group in rankedGroups) {
+      for (final DetectionCandidate member in group.members) {
+        if (selectedCandidates.length >= _config.maxNormalObjectsToSpeak) {
+          break;
+        }
+
+        selectedCandidates.add(member);
+      }
+
+      if (selectedCandidates.length >= _config.maxNormalObjectsToSpeak) {
+        break;
+      }
+    }
+
+    if (selectedCandidates.isEmpty) {
+      return <CandidateGroup>[];
+    }
+
+    final List<CandidateGroup> regrouped = _groupCandidates(selectedCandidates);
+
+    // Regrouping can reorder items because it rebuilds the groups from scratch.
+    // Restore the original ranked order so speech still follows the same top-down
+    // priority list determined earlier by scoring and person override rules.
+    final Map<String, int> originalOrder = <String, int>{};
+    for (int i = 0; i < rankedGroups.length; i++) {
+      originalOrder[rankedGroups[i].stableKey] = i;
+    }
+
+    regrouped.sort((CandidateGroup a, CandidateGroup b) {
+      final int aIndex = originalOrder[a.stableKey] ?? 1 << 30;
+      final int bIndex = originalOrder[b.stableKey] ?? 1 << 30;
+      return aIndex.compareTo(bIndex);
+    });
+
+    return regrouped;
   }
 
   /// Builds a compact summary key for the groups that would be spoken.
@@ -675,7 +748,7 @@ class AnnouncementEngine
       return '';
     }
 
-    final List<CandidateGroup> previewGroups = groups.take(_config.maxNormalGroupsToSpeak).toList();
+    final List<CandidateGroup> previewGroups = _selectTopGroupsWithinObjectBudget(groups);
 
     return _buildNormalSentence(previewGroups);
   }

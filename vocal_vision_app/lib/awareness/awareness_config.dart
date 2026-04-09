@@ -21,7 +21,7 @@ class AwarenessConfig {
     required this.personPriorityOverrideFeet,
     required this.minStableCycles,
     required this.distanceBufferFeet,
-    required this.maxNormalGroupsToSpeak,
+    required this.maxNormalObjectsToSpeak,
     required this.averageHeightsFeet,
     required this.allowedLabels,
     required this.cameraVerticalFovDeg,
@@ -57,8 +57,13 @@ class AwarenessConfig {
   // Spoken distance changes only count when they cross this buffer size.
   final double distanceBufferFeet;
 
-  // Maximum number of grouped spoken items in a normal announcement.
-  final int maxNormalGroupsToSpeak;
+  // Maximum number of actual detected objects represented in one normal announcement.
+  //
+  // Important: this is an object budget, not a group budget. For example, if
+  // the top ranked detections are 2 chairs on the right and 1 chair on the
+  // left, the spoken output may become "2 chairs right, chair left" because
+  // that still represents only 3 real objects total.
+  final int maxNormalObjectsToSpeak;
 
   final Map<String, double> averageHeightsFeet;
   final List<String> allowedLabels;
@@ -89,7 +94,7 @@ class AwarenessConfig {
 
       distanceBufferFeet: 0.5,
 
-      maxNormalGroupsToSpeak: 3,
+      maxNormalObjectsToSpeak: 3,
 
       averageHeightsFeet: const {
         'person': 5.0,
@@ -115,8 +120,8 @@ class AwarenessConfig {
         'door',
       ],
       
-      //cameraVerticalFovDeg: Platform.isIOS ? 70.0 : 120.0,
-      cameraVerticalFovDeg: 120.0,
+      //cameraVerticalFovDeg: 70.0, // Android
+      cameraVerticalFovDeg: 120.0, // IOS
     );
   }
 }

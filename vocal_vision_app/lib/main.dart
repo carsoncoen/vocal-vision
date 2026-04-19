@@ -30,8 +30,7 @@ class YOLODemo extends StatelessWidget {
 }
 
 // Object detection screen
-class ObjectDetectionScreen extends StatefulWidget
-{
+class ObjectDetectionScreen extends StatefulWidget {
   const ObjectDetectionScreen({super.key});
 
   @override
@@ -39,8 +38,7 @@ class ObjectDetectionScreen extends StatefulWidget
 }
 
 // Object detection screen state
-class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
-{
+class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
   final FlutterTts _tts = FlutterTts();
   final AnnouncementEngine _announcementEngine = AnnouncementEngine();
 
@@ -49,6 +47,11 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   bool _toggleSpeaking = false;
   bool _speechInFlight = false;
 
+  double _speechRate = 0.5;
+  String _speechRateOverlayText = '';
+  Timer? _speechRateOverlayTimer;
+  double _speechRateDragDistance = 0.0;
+
   String _statusText = 'Scanning...';
 
   // Holds the exact sentence that is about to be spoken.
@@ -56,6 +59,14 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
   DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
   static const Duration _minSpeakInterval = Duration(seconds: 1);
+
+  static const double _minSpeechRate = 0.2;
+  static const double _maxSpeechRate = 1.2;
+  static const double _speechRateStep = 0.1;
+  static const double _speechRateDragThreshold = 24.0;
+  static const Duration _speechRateOverlayDuration = Duration(
+    milliseconds: 1200,
+  );
 
   // "Path Clear" announcement when no objects persist.
   static const Duration _pathClearThreshold = Duration(milliseconds: 500);
@@ -83,7 +94,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   // Tilt tracking (0 = upright, 1 = flat/fully tilted).
   StreamSubscription<AccelerometerEvent>? _accelerometerSub;
   DateTime _lastTiltVibration = DateTime.fromMillisecondsSinceEpoch(0);
-  DateTime _tiltVibrationSuppressedUntil = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _tiltVibrationSuppressedUntil = DateTime.fromMillisecondsSinceEpoch(
+    0,
+  );
 
   bool _hasVibrator = false;
 
@@ -112,10 +125,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   Future<void> _initTts() async {
     await _tts.setLanguage('en-US');
 
-    // The sponsor is comfortable with faster speech, so this is intentionally
-    // quicker than the original value. It keeps mandatory distance callouts from
-    // sounding too delayed.
-    await _tts.setSpeechRate(0.5);
+    // Start from a moderate default rate that can later be adjusted with a
+    // vertical swipe gesture.
+    await _tts.setSpeechRate(_speechRate);
 
     // We still wait for completion so _isSpeaking reflects real TTS state.
     await _tts.awaitSpeakCompletion(true);
@@ -168,35 +180,39 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
         _pendingSpokenText = '';
       });
     });
-
   }
 
   Future<void> _initApp() async {
-  // Request the camera permission
-  PermissionStatus status = await Permission.camera.request();
+    // Request the camera permission
+    PermissionStatus status = await Permission.camera.request();
 
-  if (status.isGranted) {
-    _initTts();
-    _initTiltTracking();
-    _initHaptics();
-    
-    if (mounted) {
-      setState(() => _statusText = 'Scanning...');
-    }
-  } else if (status.isPermanentlyDenied) {
-    if (mounted) {
-      setState(() => _statusText = 'Camera denied. Please enable in Settings.');
-    }
-    await openAppSettings();
-  } else {
-    if (mounted) {
-      setState(() => _statusText = 'Camera access is required for detection.');
+    if (status.isGranted) {
+      _initTts();
+      _initTiltTracking();
+      _initHaptics();
+
+      if (mounted) {
+        setState(() => _statusText = 'Scanning...');
+      }
+    } else if (status.isPermanentlyDenied) {
+      if (mounted) {
+        setState(
+          () => _statusText = 'Camera denied. Please enable in Settings.',
+        );
+      }
+      await openAppSettings();
+    } else {
+      if (mounted) {
+        setState(
+          () => _statusText = 'Camera access is required for detection.',
+        );
+      }
     }
   }
-}
 
   @override
   void dispose() {
+    _speechRateOverlayTimer?.cancel();
     _accelerometerSub?.cancel();
     _tts.stop();
     super.dispose();
@@ -212,7 +228,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
         // Compute a true "upright -> flat" angle using gravity magnitude:
         // - 0 deg when gravity aligns with device Y axis (phone upright)
         // - 90 deg when gravity is perpendicular to Y axis (phone flat)
-        final double gravityMagnitude = math.sqrt((ax * ax) + (ay * ay) + (az * az));
+        final double gravityMagnitude = math.sqrt(
+          (ax * ax) + (ay * ay) + (az * az),
+        );
         if (gravityMagnitude <= 0) {
           return;
         }
@@ -221,7 +239,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
         final double tiltRadians = math.acos(cosTheta); // 0..pi/2
         final double tiltDegrees = tiltRadians * 180.0 / math.pi;
         final double tilt = (tiltRadians / (math.pi / 2.0)).clamp(0.0, 1.0);
-        print('Tilt: ${tilt.toStringAsFixed(3)} (${tiltDegrees.toStringAsFixed(1)} deg)');
+        print(
+          'Tilt: ${tilt.toStringAsFixed(3)} (${tiltDegrees.toStringAsFixed(1)} deg)',
+        );
 
         _tryVibrateForTilt(tiltDegrees);
       },
@@ -230,6 +250,68 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       },
       cancelOnError: false,
     );
+  }
+
+  Future<void> _setSpeechRate(double nextRate) async {
+    final double clampedRate = nextRate.clamp(_minSpeechRate, _maxSpeechRate);
+    if (clampedRate == _speechRate) {
+      return;
+    }
+
+    setState(() {
+      _speechRate = clampedRate;
+      _speechRateOverlayText =
+          'Speech speed ${_speechRate.toStringAsFixed(1)}x';
+    });
+
+    _speechRateOverlayTimer?.cancel();
+    _speechRateOverlayTimer = Timer(_speechRateOverlayDuration, () {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _speechRateOverlayText = '';
+      });
+    });
+
+    await _tts.setSpeechRate(_speechRate);
+  }
+
+  Future<void> _adjustSpeechRateByStep(int steps) async {
+    if (steps == 0) {
+      return;
+    }
+
+    await _setSpeechRate(_speechRate + (steps * _speechRateStep));
+  }
+
+  void _handleSpeechRateDragStart(DragStartDetails details) {
+    _speechRateDragDistance = 0.0;
+  }
+
+  Future<void> _handleSpeechRateDragUpdate(DragUpdateDetails details) async {
+    if (_toggleSpeaking) {
+      return;
+    }
+
+    _speechRateDragDistance += -details.delta.dy;
+
+    int steps = 0;
+    while (_speechRateDragDistance.abs() >= _speechRateDragThreshold) {
+      steps += _speechRateDragDistance.isNegative ? -1 : 1;
+      _speechRateDragDistance += _speechRateDragDistance.isNegative
+          ? _speechRateDragThreshold
+          : -_speechRateDragThreshold;
+    }
+
+    if (steps != 0) {
+      await _adjustSpeechRateByStep(steps);
+    }
+  }
+
+  void _handleSpeechRateDragEnd(DragEndDetails details) {
+    _speechRateDragDistance = 0.0;
   }
 
   void _tryVibrateForTilt(double tiltDegrees) {
@@ -257,14 +339,24 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     _lastTiltVibration = now;
 
     // Convert degrees above threshold into a 0..1 progression.
-    final double rawProgress = ((tiltDegrees - _minTiltForHapticsDeg) / (_maxTiltForHapticsDeg - _minTiltForHapticsDeg)).clamp(0.0, 1.0);
-    
+    final double rawProgress =
+        ((tiltDegrees - _minTiltForHapticsDeg) /
+                (_maxTiltForHapticsDeg - _minTiltForHapticsDeg))
+            .clamp(0.0, 1.0);
+
     // Ease-out makes early increases (e.g., +15 deg) feel meaningfully stronger.
-    final double hapticProgress = 1.0 - math.pow(1.0 - rawProgress, 3).toDouble();
+    final double hapticProgress =
+        1.0 - math.pow(1.0 - rawProgress, 3).toDouble();
 
     // Duration: 200ms at threshold, then ramps aggressively with tilt.
-    final int duration = (_tiltVibrationBaseDurationMs + hapticProgress * _tiltVibrationExtraDurationMs).round();
-    final int amplitude = (90 + hapticProgress * (255 - 90)).round().clamp(1, 255);
+    final int duration =
+        (_tiltVibrationBaseDurationMs +
+                hapticProgress * _tiltVibrationExtraDurationMs)
+            .round();
+    final int amplitude = (90 + hapticProgress * (255 - 90)).round().clamp(
+      1,
+      255,
+    );
     final double sharpness = (0.35 + hapticProgress * 0.65).clamp(0.0, 1.0);
 
     if (!_hasVibrator) {
@@ -302,7 +394,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     });
 
     // Prevent any pending tilt haptics from firing right after toggling.
-    _tiltVibrationSuppressedUntil = DateTime.now().add(const Duration(milliseconds: 500));
+    _tiltVibrationSuppressedUntil = DateTime.now().add(
+      const Duration(milliseconds: 500),
+    );
 
     await Future.delayed(const Duration(milliseconds: 150));
     await _speakSynchronized(turningOn ? 'Detection on' : 'Detection off');
@@ -358,7 +452,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     _debugCallbackCount++;
 
     final DateTime now = DateTime.now();
-    final int elapsedMs = now.difference(_debugCallbackWindowStart).inMilliseconds;
+    final int elapsedMs = now
+        .difference(_debugCallbackWindowStart)
+        .inMilliseconds;
 
     // Print about once every second so the console stays readable.
     if (elapsedMs >= 1000) {
@@ -383,7 +479,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   /// - stop repeating when the path clears
   Future<void> _handleDetections(List<YOLOResult> detections) async {
     _debugLogCallbackFps();
-    
+
     if (_toggleSpeaking) {
       return;
     }
@@ -392,10 +488,13 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       return;
     }
 
-    final AnnouncementDecision decision = _announcementEngine.processDetections(detections);
+    final AnnouncementDecision decision = _announcementEngine.processDetections(
+      detections,
+    );
     final DateTime now = DateTime.now();
 
-    final bool hasAnyGroups = decision.type != AnnouncementType.none || decision.topGroups.isNotEmpty;
+    final bool hasAnyGroups =
+        decision.type != AnnouncementType.none || decision.topGroups.isNotEmpty;
     if (hasAnyGroups) {
       _lastTimeHadAnyGroups = now;
       _pathClearAnnouncedSinceLastObjects = false;
@@ -410,7 +509,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
     if (decision.type == AnnouncementType.none && decision.topGroups.isEmpty) {
       _lastSpokenNormalSummaryKey = '';
 
-      final bool thresholdPassed = now.difference(_lastTimeHadAnyGroups) >= _pathClearThreshold;
+      final bool thresholdPassed =
+          now.difference(_lastTimeHadAnyGroups) >= _pathClearThreshold;
       if (thresholdPassed &&
           !_pathClearAnnouncedSinceLastObjects &&
           !_isSpeaking &&
@@ -453,20 +553,24 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
       // }
 
       // Pause tilt haptics briefly so the two vibration systems don't overlap.
-      _tiltVibrationSuppressedUntil = now.add(const Duration(milliseconds: 700));
-
+      _tiltVibrationSuppressedUntil = now.add(
+        const Duration(milliseconds: 700),
+      );
 
       // Keep the visible text synchronized with the actual start of speech.
       await _speakSynchronized(decision.spokenText);
       return;
     }
 
-    if (decision.type != AnnouncementType.normal || decision.summaryKey.isEmpty) {
+    if (decision.type != AnnouncementType.normal ||
+        decision.summaryKey.isEmpty) {
       return;
     }
 
-    final bool summaryChanged = decision.summaryKey != _lastSpokenNormalSummaryKey;
-    final bool repeatIntervalElapsed = now.difference(_lastSpoken) >= _normalRepeatInterval;
+    final bool summaryChanged =
+        decision.summaryKey != _lastSpokenNormalSummaryKey;
+    final bool repeatIntervalElapsed =
+        now.difference(_lastSpoken) >= _normalRepeatInterval;
 
     // Speak if this is a new stable summary, or if the same stable summary has
     // stayed active long enough to deserve another reminder.
@@ -495,15 +599,12 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
 
   @override
   Widget build(BuildContext context) {
-  // Enable GPU on iOS, disable on Android (especially emulators)
-  final bool useGpu = Platform.isIOS;
+    // Enable GPU on iOS, disable on Android (especially emulators)
+    final bool useGpu = Platform.isIOS;
 
-  return Scaffold(
-    backgroundColor: Colors.black,
-    body: GestureDetector( 
-      behavior: HitTestBehavior.opaque,
-      onDoubleTap: _toggleDetection, 
-      child: Stack(
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
         children: [
           YOLOView(
             modelPath: 'yolo11n',
@@ -516,7 +617,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
               color: Colors.black.withOpacity(0.6),
               child: const Center(
                 child: Text(
-                  'Detection Paused\nDouble tap to resume', 
+                  'Detection Paused\nDouble tap to resume',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white,
@@ -527,6 +628,40 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
               ),
             ),
           Positioned(
+            top: 56,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                opacity: _speechRateOverlayText.isEmpty ? 0.0 : 1.0,
+                duration: const Duration(milliseconds: 180),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.65),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Text(
+                      _speechRateOverlayText.isEmpty
+                          ? 'Speech speed ${_speechRate.toStringAsFixed(1)}x'
+                          : _speechRateOverlayText,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
             bottom: 150,
             left: 0,
             right: 0,
@@ -535,18 +670,23 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
               color: Colors.black87,
               child: Text(
                 _statusText,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                ),
+                style: const TextStyle(color: Colors.white, fontSize: 16),
                 textAlign: TextAlign.center,
               ),
             ),
           ),
-
-
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onVerticalDragStart: _handleSpeechRateDragStart,
+              onVerticalDragUpdate: _handleSpeechRateDragUpdate,
+              onVerticalDragEnd: _handleSpeechRateDragEnd,
+              onDoubleTap: _toggleDetection,
+              child: const SizedBox.expand(),
+            ),
+          ),
         ],
       ),
-    ),
-  );
-}}
+    );
+  }
+}

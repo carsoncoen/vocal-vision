@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:sensors_plus/sensors_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ultralytics_yolo/yolo.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
 import 'package:vibration/vibration.dart';
@@ -50,6 +51,8 @@ class ObjectDetectionScreen extends StatefulWidget {
 }
 
 class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
+  static const String _hasSeenTutorialPrefKey = 'has_seen_vocal_vision_tutorial';
+
   final FlutterTts _tts = FlutterTts();
   final AnnouncementEngine _announcementEngine = AnnouncementEngine();
 
@@ -58,7 +61,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
   bool _toggleSpeaking = false;
   bool _speechInFlight = false;
 
-  // App starts in tutorial mode every time it opens.
+  // App starts in tutorial mode only until startup decides whether to auto-play
+  // the first-launch tutorial or jump straight into scanning.
   AppMode _appMode = AppMode.tutorial;
 
   String _statusText = 'Tutorial ready';
@@ -82,9 +86,12 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
   static const double _speechRateStep = 0.2;
   static const double _speechRateSwipeDistanceThreshold = 60.0;
   static const double _speechRateSwipeVelocityThreshold = 350.0;
-  static const Duration _speechRateOverlayDuration = Duration(
-    milliseconds: 1200,
-  );
+  static const Duration _speechRateOverlayDuration = Duration(milliseconds: 1200);
+
+  // Tutorial transition flags.
+  bool _hasSeenTutorial = false;
+  bool _autoStartDetectionAfterTutorial = false;
+  AppMode? _modeToRestoreAfterTutorial;
 
   // "Path Clear" announcement when no objects persist.
   static const Duration _pathClearThreshold = Duration(milliseconds: 500);
@@ -110,8 +117,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
 
   StreamSubscription<AccelerometerEvent>? _accelerometerSub;
   DateTime _lastTiltVibration = DateTime.fromMillisecondsSinceEpoch(0);
-  DateTime _tiltVibrationSuppressedUntil =
-      DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _tiltVibrationSuppressedUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool _hasVibrator = false;
 
@@ -131,7 +137,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
       'Stronger or longer vibration means the tilt is worse. '
       'Press and hold anywhere on the screen to skip this tutorial and begin detection. '
       'After detection starts, double tap anywhere on the screen to pause or resume detection. '
-      'When detection is paused, press and hold anywhere to hear this tutorial again. '
+      'At any time, press and hold anywhere on the screen to hear this tutorial again. '
       'Note: This app is still under development. '
       'The app detects a specific set of important on-ground indoor objects, not everything around you. '
       'Distance estimates may not always be exact, and the app may be less accurate in very busy or chaotic environments. '
@@ -158,6 +164,24 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
       if (!mounted) return;
       setState(() => _hasVibrator = value);
     });
+  }
+
+  Future<void> _handleTutorialSpeechEnd() async {
+    final bool shouldAutoStart =
+        _appMode == AppMode.tutorial && _autoStartDetectionAfterTutorial;
+    final AppMode? restoreMode =
+        _appMode == AppMode.tutorial ? _modeToRestoreAfterTutorial : null;
+
+    if (shouldAutoStart) {
+      _autoStartDetectionAfterTutorial = false;
+      await _enterDetectingMode(announceTransition: false);
+      return;
+    }
+
+    if (restoreMode != null) {
+      _modeToRestoreAfterTutorial = null;
+      await _restoreAfterTutorialReplay(restoreMode);
+    }
   }
 
   Future<void> _initTts() async {
@@ -196,6 +220,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
         _speechInFlight = false;
         _pendingSpokenText = '';
       });
+
+      // Tutorial transitions are decided only after the utterance fully ends.
+      unawaited(_handleTutorialSpeechEnd());
     });
 
     _tts.setErrorHandler((_) {
@@ -208,6 +235,10 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
         _speechInFlight = false;
         _pendingSpokenText = '';
       });
+
+      // Use the same fallback path as normal completion so a TTS failure
+      // during tutorial playback does not trap the app in tutorial mode.
+      unawaited(_handleTutorialSpeechEnd());
     });
   }
 
@@ -219,17 +250,29 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
       _initTiltTracking();
       _initHaptics();
 
-      if (mounted) {
-        setState(() {
-          _appMode = AppMode.tutorial;
-          _detectionEnabled = false;
-          _statusText = 'Tutorial ready';
-        });
-      }
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      _hasSeenTutorial = prefs.getBool(_hasSeenTutorialPrefKey) ?? false;
 
-      // Auto-play the tutorial every time the app opens.
-      await Future.delayed(const Duration(milliseconds: 300));
-      await _speakTutorial();
+      if (!_hasSeenTutorial) {
+        if (mounted) {
+          setState(() {
+            _appMode = AppMode.tutorial;
+            _detectionEnabled = false;
+            _statusText = 'Tutorial ready';
+          });
+        }
+
+        // Auto-play the tutorial only on the first app open, then begin
+        // detection automatically when the speech finishes.
+        _autoStartDetectionAfterTutorial = true;
+        await prefs.setBool(_hasSeenTutorialPrefKey, true);
+        _hasSeenTutorial = true;
+
+        await Future.delayed(const Duration(milliseconds: 300));
+        await _speakTutorial();
+      } else {
+        await _enterDetectingMode(announceTransition: false);
+      }
     } else if (status.isPermanentlyDenied) {
       if (mounted) {
         setState(() {
@@ -256,8 +299,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
         // Compute a true "upright -> flat" angle using gravity magnitude:
         // - 0 deg when gravity aligns with device Y axis (phone upright)
         // - 90 deg when gravity is perpendicular to Y axis (phone flat)
-        final double gravityMagnitude =
-            math.sqrt((ax * ax) + (ay * ay) + (az * az));
+        final double gravityMagnitude = math.sqrt((ax * ax) + (ay * ay) + (az * az));
         if (gravityMagnitude <= 0) {
           return;
         }
@@ -266,10 +308,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
         final double tiltRadians = math.acos(cosTheta);
         final double tiltDegrees = tiltRadians * 180.0 / math.pi;
         final double tilt = (tiltRadians / (math.pi / 2.0)).clamp(0.0, 1.0);
-        print(
-          'Tilt: ${tilt.toStringAsFixed(3)} '
-          '(${tiltDegrees.toStringAsFixed(1)} deg)',
-        );
+        print('Tilt: ${tilt.toStringAsFixed(3)} (${tiltDegrees.toStringAsFixed(1)} deg)');
 
         _tryVibrateForTilt(tiltDegrees);
       },
@@ -338,10 +377,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
     final double swipeDistance = _speechRateSwipeStartY - _speechRateSwipeLatestY;
     final double swipeVelocity = -details.velocity.pixelsPerSecond.dy;
 
-    final bool passedDistance =
-        swipeDistance.abs() >= _speechRateSwipeDistanceThreshold;
-    final bool passedVelocity =
-        swipeVelocity.abs() >= _speechRateSwipeVelocityThreshold;
+    final bool passedDistance = swipeDistance.abs() >= _speechRateSwipeDistanceThreshold;
+    final bool passedVelocity = swipeVelocity.abs() >= _speechRateSwipeVelocityThreshold;
 
     if (!passedDistance && !passedVelocity) {
       _speechRateSwipeStartY = 0.0;
@@ -390,16 +427,13 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
         .clamp(0.0, 1.0);
 
     // Ease-out makes early increases feel meaningfully stronger.
-    final double hapticProgress =
-        1.0 - math.pow(1.0 - rawProgress, 3).toDouble();
+    final double hapticProgress = 1.0 - math.pow(1.0 - rawProgress, 3).toDouble();
 
     final int duration =
         (_tiltVibrationBaseDurationMs + hapticProgress * _tiltVibrationExtraDurationMs)
             .round();
-    final int amplitude =
-        (90 + hapticProgress * (255 - 90)).round().clamp(1, 255);
-    final double sharpness =
-        (0.35 + hapticProgress * 0.65).clamp(0.0, 1.0);
+    final int amplitude = (90 + hapticProgress * (255 - 90)).round().clamp(1, 255);
+    final double sharpness = (0.35 + hapticProgress * 0.65).clamp(0.0, 1.0);
 
     if (!_hasVibrator) {
       return;
@@ -450,7 +484,39 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
     await _tts.speak(text);
   }
 
-  // Replays the full onboarding tutorial.
+  // Replays the full onboarding tutorial. Detection is muted while the
+  // tutorial speaks, then the previous mode is restored automatically.
+  Future<void> _replayTutorialFromCurrentState() async {
+    if (_toggleSpeaking || _appMode == AppMode.tutorial) {
+      return;
+    }
+
+    final AppMode modeBeforeReplay = _appMode;
+
+    await _tts.stop();
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _isSpeaking = false;
+      _speechInFlight = false;
+      _pendingSpokenText = '';
+      _appMode = AppMode.tutorial;
+      _detectionEnabled = false;
+      _statusText = 'Tutorial ready';
+    });
+
+    _modeToRestoreAfterTutorial = modeBeforeReplay;
+    _autoStartDetectionAfterTutorial = false;
+    _tiltVibrationSuppressedUntil = DateTime.now().add(const Duration(milliseconds: 500));
+
+    await _speakSynchronized(_tutorialText);
+  }
+
+  // Replays the tutorial while already in tutorial mode. This does not change
+  // the tutorial state; it only re-speaks the content.
   Future<void> _speakTutorial() async {
     if (_toggleSpeaking) {
       return;
@@ -472,14 +538,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
     await _speakSynchronized(_tutorialText);
   }
 
-  // Starts live detection after the user completes the tutorial.
-  Future<void> _startDetectionFromTutorial() async {
-    _toggleSpeaking = true;
-
-    await _tts.stop();
-
+  // Starts or restores live detection after leaving tutorial mode.
+  Future<void> _enterDetectingMode({required bool announceTransition}) async {
     if (!mounted) {
-      _toggleSpeaking = false;
       return;
     }
 
@@ -492,21 +553,63 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
       _statusText = 'Scanning...';
     });
 
-    _tiltVibrationSuppressedUntil =
-        DateTime.now().add(const Duration(milliseconds: 500));
+    _modeToRestoreAfterTutorial = null;
+    _autoStartDetectionAfterTutorial = false;
+    _tiltVibrationSuppressedUntil = DateTime.now().add(const Duration(milliseconds: 500));
     _resetDetectionCycleState();
 
+    if (!announceTransition) {
+      return;
+    }
+
+    _toggleSpeaking = true;
     await Future.delayed(const Duration(milliseconds: 150));
     await _speakSynchronized('Detection on');
-
     await Future.delayed(const Duration(milliseconds: 250));
+    _toggleSpeaking = false;
+  }
+
+  Future<void> _restoreAfterTutorialReplay(AppMode restoreMode) async {
+    if (!mounted) {
+      return;
+    }
+
+    if (restoreMode == AppMode.detecting) {
+      await _enterDetectingMode(announceTransition: false);
+      return;
+    }
+
+    setState(() {
+      _appMode = AppMode.paused;
+      _detectionEnabled = false;
+      _statusText = 'Detection paused';
+    });
+
+    _tiltVibrationSuppressedUntil = DateTime.now().add(const Duration(milliseconds: 500));
+    _resetDetectionCycleState();
+  }
+
+  // Starts live detection after the user skips the tutorial.
+  Future<void> _startDetectionFromTutorial() async {
+    _toggleSpeaking = true;
+    _autoStartDetectionAfterTutorial = false;
+    _modeToRestoreAfterTutorial = null;
+
+    await _tts.stop();
+
+    if (!mounted) {
+      _toggleSpeaking = false;
+      return;
+    }
+
+    await _enterDetectingMode(announceTransition: true);
     _toggleSpeaking = false;
   }
 
   // Pauses or resumes detection after the user is already in the live flow.
   Future<void> _toggleDetection() async {
-    // Tutorial should be exited through the dedicated long-press gesture,
-    // not by the normal double-tap pause/resume control.
+    // Ignore double tap while in tutorial mode. Tutorial exit is handled by
+    // long press so normal pause/resume keeps one consistent meaning.
     if (_appMode == AppMode.tutorial) {
       return;
     }
@@ -535,8 +638,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
     });
 
     // Prevent any pending tilt haptics from firing right after toggling.
-    _tiltVibrationSuppressedUntil =
-        DateTime.now().add(const Duration(milliseconds: 500));
+    _tiltVibrationSuppressedUntil = DateTime.now().add(const Duration(milliseconds: 500));
 
     await Future.delayed(const Duration(milliseconds: 150));
     await _speakSynchronized(turningOn ? 'Detection on' : 'Detection off');
@@ -546,8 +648,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
     _toggleSpeaking = false;
   }
 
-  // Long press is reserved for tutorial control so it does not interfere with
-  // the normal pause/resume gesture.
+  // Long press handles tutorial actions without changing the existing
+  // double-tap pause/resume meaning.
   Future<void> _handleLongPressAction() async {
     if (_toggleSpeaking) {
       return;
@@ -558,9 +660,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
       return;
     }
 
-    if (_appMode == AppMode.paused) {
-      await _speakTutorial();
-    }
+    await _replayTutorialFromCurrentState();
   }
 
   // Prints approximate YOLO callback FPS once per second.
@@ -568,8 +668,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
     _debugCallbackCount++;
 
     final DateTime now = DateTime.now();
-    final int elapsedMs =
-        now.difference(_debugCallbackWindowStart).inMilliseconds;
+    final int elapsedMs = now.difference(_debugCallbackWindowStart).inMilliseconds;
 
     if (elapsedMs >= 1000) {
       final double callbackFps = _debugCallbackCount * 1000 / elapsedMs;
@@ -598,8 +697,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
       return;
     }
 
-    final AnnouncementDecision decision =
-        _announcementEngine.processDetections(detections);
+    final AnnouncementDecision decision = _announcementEngine.processDetections(detections);
     final DateTime now = DateTime.now();
 
     final bool hasAnyGroups =
@@ -652,22 +750,18 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
       });
 
       // Pause tilt haptics briefly so the two vibration systems do not overlap.
-      _tiltVibrationSuppressedUntil =
-          now.add(const Duration(milliseconds: 700));
+      _tiltVibrationSuppressedUntil = now.add(const Duration(milliseconds: 700));
 
       await _speakSynchronized(decision.spokenText);
       return;
     }
 
-    if (decision.type != AnnouncementType.normal ||
-        decision.summaryKey.isEmpty) {
+    if (decision.type != AnnouncementType.normal || decision.summaryKey.isEmpty) {
       return;
     }
 
-    final bool summaryChanged =
-        decision.summaryKey != _lastSpokenNormalSummaryKey;
-    final bool repeatIntervalElapsed =
-        now.difference(_lastSpoken) >= _normalRepeatInterval;
+    final bool summaryChanged = decision.summaryKey != _lastSpokenNormalSummaryKey;
+    final bool repeatIntervalElapsed = now.difference(_lastSpoken) >= _normalRepeatInterval;
 
     final bool shouldSpeakNormal = summaryChanged || repeatIntervalElapsed;
     if (!shouldSpeakNormal) {
@@ -697,8 +791,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
             constraints: const BoxConstraints(maxWidth: 520),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              children: const [
-                Text(
+              children: [
+                const Text(
                   'Vocal Vision Tutorial',
                   textAlign: TextAlign.center,
                   style: TextStyle(
@@ -707,12 +801,13 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                SizedBox(height: 16),
+                const SizedBox(height: 16),
                 Text(
-                  'Press and hold anywhere on the screen to skip the tutorial and begin detection. '
-                  'This tutorial will play each time the app opens.',
+                  _modeToRestoreAfterTutorial == null
+                      ? 'Press and hold anywhere on the screen to skip the tutorial and begin detection.'
+                      : 'Press and hold anywhere on the screen to skip the tutorial and return.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 18,
                     height: 1.4,
@@ -734,9 +829,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 420),
-            child: Column(
+            child: const Column(
               mainAxisSize: MainAxisSize.min,
-              children: const [
+              children: [
                 Text(
                   'Detection Paused',
                   textAlign: TextAlign.center,
@@ -748,8 +843,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
                 ),
                 SizedBox(height: 12),
                 Text(
-                  'Double tap anywhere to resume detection. '
-                  'Press and hold anywhere to hear the tutorial again.',
+                  'Double tap anywhere to resume detection. Press and hold anywhere to hear the tutorial again.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white,

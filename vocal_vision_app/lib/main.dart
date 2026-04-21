@@ -51,7 +51,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
   double _speechRate = 0.5;
   String _speechRateOverlayText = '';
   Timer? _speechRateOverlayTimer;
-  double _speechRateDragDistance = 0.0;
+  double _speechRateSwipeStartY = 0.0;
+  double _speechRateSwipeLatestY = 0.0;
 
   String _statusText = 'Scanning...';
 
@@ -63,8 +64,9 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
 
   static const double _minSpeechRate = 0.2;
   static const double _maxSpeechRate = 1.2;
-  static const double _speechRateStep = 0.1;
-  static const double _speechRateDragThreshold = 24.0;
+  static const double _speechRateStep = 0.2;
+  static const double _speechRateSwipeDistanceThreshold = 60.0;
+  static const double _speechRateSwipeVelocityThreshold = 350.0;
   static const Duration _speechRateOverlayDuration = Duration(
     milliseconds: 1200,
   );
@@ -290,31 +292,49 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
   }
 
   void _handleSpeechRateDragStart(DragStartDetails details) {
-    _speechRateDragDistance = 0.0;
+    _speechRateSwipeStartY = details.globalPosition.dy;
+    _speechRateSwipeLatestY = details.globalPosition.dy;
   }
 
-  Future<void> _handleSpeechRateDragUpdate(DragUpdateDetails details) async {
-    if (_toggleSpeaking) {
+  void _handleSpeechRateDragUpdate(DragUpdateDetails details) {
+    if (_toggleSpeaking || !_detectionEnabled) {
+      _speechRateSwipeStartY = details.globalPosition.dy;
+      _speechRateSwipeLatestY = details.globalPosition.dy;
       return;
     }
 
-    _speechRateDragDistance += -details.delta.dy;
-
-    int steps = 0;
-    while (_speechRateDragDistance.abs() >= _speechRateDragThreshold) {
-      steps += _speechRateDragDistance.isNegative ? -1 : 1;
-      _speechRateDragDistance += _speechRateDragDistance.isNegative
-          ? _speechRateDragThreshold
-          : -_speechRateDragThreshold;
-    }
-
-    if (steps != 0) {
-      await _adjustSpeechRateByStep(steps);
-    }
+    _speechRateSwipeLatestY = details.globalPosition.dy;
   }
 
   void _handleSpeechRateDragEnd(DragEndDetails details) {
-    _speechRateDragDistance = 0.0;
+    if (_toggleSpeaking || !_detectionEnabled) {
+      _speechRateSwipeStartY = 0.0;
+      _speechRateSwipeLatestY = 0.0;
+      return;
+    }
+
+    final double swipeDistance = _speechRateSwipeStartY - _speechRateSwipeLatestY;
+    final double swipeVelocity = -details.velocity.pixelsPerSecond.dy;
+
+    final bool passedDistance =
+        swipeDistance.abs() >= _speechRateSwipeDistanceThreshold;
+    final bool passedVelocity =
+        swipeVelocity.abs() >= _speechRateSwipeVelocityThreshold;
+
+    if (!passedDistance && !passedVelocity) {
+      _speechRateSwipeStartY = 0.0;
+      _speechRateSwipeLatestY = 0.0;
+      return;
+    }
+
+    final int stepDirection = passedVelocity
+        ? (swipeVelocity.isNegative ? -1 : 1)
+        : (swipeDistance.isNegative ? -1 : 1);
+
+    unawaited(_adjustSpeechRateByStep(stepDirection));
+
+    _speechRateSwipeStartY = 0.0;
+    _speechRateSwipeLatestY = 0.0;
   }
 
   void _tryVibrateForTilt(double tiltDegrees) {

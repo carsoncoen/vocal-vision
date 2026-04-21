@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:vibration/vibration.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:ultralytics_yolo/yolo.dart';
@@ -86,6 +87,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   @override
   void initState() {
     super.initState();
+    WakelockPlus.enable();
     _initApp();
   }
 
@@ -157,6 +159,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen>
   void dispose() {
     _accelerometerSub?.cancel();
     _tts.stop();
+    WakelockPlus.disable();
     super.dispose();
   }
 

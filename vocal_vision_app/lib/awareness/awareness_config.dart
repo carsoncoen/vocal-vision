@@ -1,5 +1,3 @@
-import 'dart:io';
-
 /// Central place for awareness tuning knobs.
 ///
 /// Keeping these values in one file makes testing easier because teammates can adjust behavior without digging through detection or TTS code.

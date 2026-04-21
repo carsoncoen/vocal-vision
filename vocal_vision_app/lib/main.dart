@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:ultralytics_yolo/yolo.dart';
@@ -41,7 +42,7 @@ class YOLODemo extends StatelessWidget {
   }
 }
 
-// Object detection screen.
+// Object detection screen
 class ObjectDetectionScreen extends StatefulWidget {
   const ObjectDetectionScreen({super.key});
 
@@ -50,6 +51,8 @@ class ObjectDetectionScreen extends StatefulWidget {
 }
 
 class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
+// Object detection screen state
+class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
   final FlutterTts _tts = FlutterTts();
   final AnnouncementEngine _announcementEngine = AnnouncementEngine();
 
@@ -57,6 +60,18 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
   bool _detectionEnabled = false;
   bool _toggleSpeaking = false;
   bool _speechInFlight = false;
+
+  double _speechRate = 0.5;
+  String _speechRateOverlayText = '';
+  Timer? _speechRateOverlayTimer;
+  double _speechRateSwipeStartY = 0.0;
+  double _speechRateSwipeLatestY = 0.0;
+
+  double _speechRate = 0.5;
+  String _speechRateOverlayText = '';
+  Timer? _speechRateOverlayTimer;
+  double _speechRateSwipeStartY = 0.0;
+  double _speechRateSwipeLatestY = 0.0;
 
   // Tutorial is the first thing a new user experiences. Detection only begins
   // after the user explicitly starts it.
@@ -69,6 +84,15 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
 
   DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
   static const Duration _minSpeakInterval = Duration(seconds: 1);
+
+  static const double _minSpeechRate = 0.2;
+  static const double _maxSpeechRate = 1.2;
+  static const double _speechRateStep = 0.2;
+  static const double _speechRateSwipeDistanceThreshold = 60.0;
+  static const double _speechRateSwipeVelocityThreshold = 350.0;
+  static const Duration _speechRateOverlayDuration = Duration(
+    milliseconds: 1200,
+  );
 
   // "Path Clear" announcement when no objects persist.
   static const Duration _pathClearThreshold = Duration(milliseconds: 500);
@@ -128,6 +152,7 @@ static const String _tutorialText =
   @override
   void initState() {
     super.initState();
+    WakelockPlus.enable();
     _initApp();
   }
 
@@ -141,9 +166,9 @@ static const String _tutorialText =
   Future<void> _initTts() async {
     await _tts.setLanguage('en-US');
 
-    // The sponsor is comfortable with faster speech, so this remains slightly
-    // quicker than the default.
-    await _tts.setSpeechRate(0.5);
+    // Start from a moderate default rate that can later be adjusted with a
+    // vertical swipe gesture.
+    await _tts.setSpeechRate(_speechRate);
 
     // Wait for speech completion so _isSpeaking reflects real TTS state.
     await _tts.awaitSpeakCompletion(true);
@@ -190,8 +215,8 @@ static const String _tutorialText =
   }
 
   Future<void> _initApp() async {
-    // Request the camera permission before enabling the detection experience.
-    final PermissionStatus status = await Permission.camera.request();
+    // Request the camera permission
+    PermissionStatus status = await Permission.camera.request();
 
     if (status.isGranted) {
       await _initTts();
@@ -227,8 +252,10 @@ static const String _tutorialText =
 
   @override
   void dispose() {
+    _speechRateOverlayTimer?.cancel();
     _accelerometerSub?.cancel();
     _tts.stop();
+    WakelockPlus.disable();
     super.dispose();
   }
 
@@ -266,6 +293,86 @@ static const String _tutorialText =
       },
       cancelOnError: false,
     );
+  }
+
+  Future<void> _setSpeechRate(double nextRate) async {
+    final double clampedRate = nextRate.clamp(_minSpeechRate, _maxSpeechRate);
+    if (clampedRate == _speechRate) {
+      return;
+    }
+
+    setState(() {
+      _speechRate = clampedRate;
+      _speechRateOverlayText =
+          'Speech speed ${_speechRate.toStringAsFixed(1)}x';
+    });
+
+    _speechRateOverlayTimer?.cancel();
+    _speechRateOverlayTimer = Timer(_speechRateOverlayDuration, () {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _speechRateOverlayText = '';
+      });
+    });
+
+    await _tts.setSpeechRate(_speechRate);
+  }
+
+  Future<void> _adjustSpeechRateByStep(int steps) async {
+    if (steps == 0) {
+      return;
+    }
+
+    await _setSpeechRate(_speechRate + (steps * _speechRateStep));
+  }
+
+  void _handleSpeechRateDragStart(DragStartDetails details) {
+    _speechRateSwipeStartY = details.globalPosition.dy;
+    _speechRateSwipeLatestY = details.globalPosition.dy;
+  }
+
+  void _handleSpeechRateDragUpdate(DragUpdateDetails details) {
+    if (_toggleSpeaking || !_detectionEnabled) {
+      _speechRateSwipeStartY = details.globalPosition.dy;
+      _speechRateSwipeLatestY = details.globalPosition.dy;
+      return;
+    }
+
+    _speechRateSwipeLatestY = details.globalPosition.dy;
+  }
+
+  void _handleSpeechRateDragEnd(DragEndDetails details) {
+    if (_toggleSpeaking || !_detectionEnabled) {
+      _speechRateSwipeStartY = 0.0;
+      _speechRateSwipeLatestY = 0.0;
+      return;
+    }
+
+    final double swipeDistance = _speechRateSwipeStartY - _speechRateSwipeLatestY;
+    final double swipeVelocity = -details.velocity.pixelsPerSecond.dy;
+
+    final bool passedDistance =
+        swipeDistance.abs() >= _speechRateSwipeDistanceThreshold;
+    final bool passedVelocity =
+        swipeVelocity.abs() >= _speechRateSwipeVelocityThreshold;
+
+    if (!passedDistance && !passedVelocity) {
+      _speechRateSwipeStartY = 0.0;
+      _speechRateSwipeLatestY = 0.0;
+      return;
+    }
+
+    final int stepDirection = passedVelocity
+        ? (swipeVelocity.isNegative ? -1 : 1)
+        : (swipeDistance.isNegative ? -1 : 1);
+
+    unawaited(_adjustSpeechRateByStep(stepDirection));
+
+    _speechRateSwipeStartY = 0.0;
+    _speechRateSwipeLatestY = 0.0;
   }
 
   void _tryVibrateForTilt(double tiltDegrees) {
@@ -333,9 +440,33 @@ static const String _tutorialText =
     );
   }
 
-  // Resets detection timing memory so switching modes does not carry over old
-  // state such as summary keys or stale cooldowns.
-  void _resetDetectionCycleState() {
+  Future<void> _toggleDetection() async {
+    _toggleSpeaking = true;
+
+    await _tts.stop();
+    _isSpeaking = false;
+
+    // Toggling detection is a hard reset for speech state, so clear any
+    // pending request that may not have started yet.
+    _speechInFlight = false;
+    _pendingSpokenText = '';
+
+    final bool turningOn = !_detectionEnabled;
+
+    setState(() {
+      _detectionEnabled = turningOn;
+    });
+
+    // Prevent any pending tilt haptics from firing right after toggling.
+    _tiltVibrationSuppressedUntil = DateTime.now().add(
+      const Duration(milliseconds: 500),
+    );
+
+    await Future.delayed(const Duration(milliseconds: 150));
+    await _speakSynchronized(turningOn ? 'Detection on' : 'Detection off');
+
+    await Future.delayed(const Duration(milliseconds: 400));
+
     _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
     _lastDangerSpoken = DateTime.fromMillisecondsSinceEpoch(0);
     _lastSpokenNormalSummaryKey = '';
@@ -482,6 +613,7 @@ static const String _tutorialText =
   Future<void> _handleDetections(List<YOLOResult> detections) async {
     _debugLogCallbackFps();
 
+
     if (_toggleSpeaking) {
       return;
     }
@@ -502,6 +634,8 @@ static const String _tutorialText =
 
     final bool hasAnyGroups =
         decision.type != AnnouncementType.none || decision.topGroups.isNotEmpty;
+    final bool hasAnyGroups =
+        decision.type != AnnouncementType.none || decision.topGroups.isNotEmpty;
     if (hasAnyGroups) {
       _lastTimeHadAnyGroups = now;
       _pathClearAnnouncedSinceLastObjects = false;
@@ -510,6 +644,8 @@ static const String _tutorialText =
     if (decision.type == AnnouncementType.none && decision.topGroups.isEmpty) {
       _lastSpokenNormalSummaryKey = '';
 
+      final bool thresholdPassed =
+          now.difference(_lastTimeHadAnyGroups) >= _pathClearThreshold;
       final bool thresholdPassed =
           now.difference(_lastTimeHadAnyGroups) >= _pathClearThreshold;
       if (thresholdPassed &&
@@ -549,6 +685,12 @@ static const String _tutorialText =
         _pendingSpokenText = '';
       });
 
+      // Pause tilt haptics briefly so the two vibration systems don't overlap.
+      _tiltVibrationSuppressedUntil = now.add(
+        const Duration(milliseconds: 700),
+      );
+
+      // Keep the visible text synchronized with the actual start of speech.
       // Pause tilt haptics briefly so the two vibration systems do not overlap.
       _tiltVibrationSuppressedUntil =
           now.add(const Duration(milliseconds: 700));
@@ -557,10 +699,15 @@ static const String _tutorialText =
       return;
     }
 
-    if (decision.type != AnnouncementType.normal || decision.summaryKey.isEmpty) {
+    if (decision.type != AnnouncementType.normal ||
+        decision.summaryKey.isEmpty) {
       return;
     }
 
+    final bool summaryChanged =
+        decision.summaryKey != _lastSpokenNormalSummaryKey;
+    final bool repeatIntervalElapsed =
+        now.difference(_lastSpoken) >= _normalRepeatInterval;
     final bool summaryChanged =
         decision.summaryKey != _lastSpokenNormalSummaryKey;
     final bool repeatIntervalElapsed =
@@ -584,6 +731,27 @@ static const String _tutorialText =
     await _speakSynchronized(decision.spokenText);
   }
 
+  @override
+  Widget build(BuildContext context) {
+    // Enable GPU on iOS, disable on Android (especially emulators)
+    final bool useGpu = Platform.isIOS;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          YOLOView(
+            modelPath: 'yolo11n',
+            task: YOLOTask.detect,
+            useGpu: useGpu,
+            onResult: _handleDetections,
+          ),
+          if (!_detectionEnabled)
+            Container(
+              color: Colors.black.withOpacity(0.6),
+              child: const Center(
+                child: Text(
+                  'Detection Paused\nDouble tap to resume',
   Widget _buildTutorialOverlay() {
     return Container(
       color: Colors.black.withOpacity(0.88),
@@ -713,118 +881,71 @@ static const String _tutorialText =
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: 18,
-                    height: 1.4,
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-                const SizedBox(height: 24),
-                Semantics(
-                  button: true,
-                  label: 'Resume Detection',
-                  hint: 'Resumes live object awareness',
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: 58,
-                    child: ElevatedButton(
-                      onPressed: _toggleDetection,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: Colors.black,
-                        textStyle: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
+              ),
+            ),
+          Positioned(
+            top: 56,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                opacity: _speechRateOverlayText.isEmpty ? 0.0 : 1.0,
+                duration: const Duration(milliseconds: 180),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.65),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Text(
+                      _speechRateOverlayText.isEmpty
+                          ? 'Speech speed ${_speechRate.toStringAsFixed(1)}x'
+                          : _speechRateOverlayText,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
                       ),
-                      child: const Text('Resume Detection'),
                     ),
                   ),
                 ),
-              ],
+              ),
             ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPauseButton() {
-    return Positioned(
-      top: 56,
-      right: 16,
-      child: SafeArea(
-        child: Semantics(
-          button: true,
-          label: 'Pause Detection',
-          hint: 'Pauses live object awareness',
-          child: ElevatedButton.icon(
-            onPressed: _toggleDetection,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.black87,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          Positioned(
+            bottom: 150,
+            left: 0,
+            right: 0,
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              color: Colors.black87,
+              child: Text(
+                _statusText,
+                style: const TextStyle(color: Colors.white, fontSize: 16),
+                textAlign: TextAlign.center,
+              ),
             ),
-            icon: const Icon(Icons.pause),
-            label: const Text('Pause'),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatusBanner() {
-    return Positioned(
-      bottom: 150,
-      left: 0,
-      right: 0,
-      child: ExcludeSemantics(
-        excluding: _appMode == AppMode.tutorial,
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          color: Colors.black87,
-          child: Text(
-            _statusText,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onVerticalDragStart: _handleSpeechRateDragStart,
+              onVerticalDragUpdate: _handleSpeechRateDragUpdate,
+              onVerticalDragEnd: _handleSpeechRateDragEnd,
+              onDoubleTap: _toggleDetection,
+              child: const SizedBox.expand(),
             ),
-            textAlign: TextAlign.center,
           ),
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // Enable GPU on iOS, disable on Android (especially emulators).
-    final bool useGpu = Platform.isIOS;
-
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-
-        // Do not let the raw full-screen gesture handle tutorial exit. On the
-        // tutorial screen, blind users should use real accessible buttons that
-        // work well with VoiceOver focus and activation.
-        onDoubleTap: _appMode == AppMode.tutorial ? null : _toggleDetection,
-        child: Stack(
-          children: [
-            YOLOView(
-              modelPath: 'yolo11n',
-              task: YOLOTask.detect,
-              useGpu: useGpu,
-              onResult: _handleDetections,
-            ),
-
-            if (_appMode == AppMode.detecting) _buildPauseButton(),
-            if (_appMode == AppMode.paused) _buildPausedOverlay(),
-            if (_appMode == AppMode.tutorial) _buildTutorialOverlay(),
-
-            // Keep the status text visible during detection and paused states.
-            if (_appMode != AppMode.tutorial) _buildStatusBanner(),
-          ],
-        ),
+        ],
       ),
     );
   }

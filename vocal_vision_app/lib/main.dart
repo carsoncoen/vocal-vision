@@ -128,20 +128,18 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
   // Spoken onboarding. It starts with value first, then usage, then a short
   // note about constraints and safe expectations.
   static const String _tutorialText =
-      'Welcome to Vocal Vision. '
-      'This app helps you stay aware of your surroundings by speaking important indoor objects ahead of you, including their relative distance and direction, as you move. '
-      'It is designed to complement your cane or guide dog, not replace them. '
-      'Hold your phone upright with the camera facing forward. '
-      'The app will announce important objects ahead and warn you when something is very close. '
-      'If the phone vibrates, that means the phone is tilted and distance estimation may be less accurate. '
-      'Stronger or longer vibration means the tilt is worse. '
-      'Press and hold anywhere on the screen to skip this tutorial and begin detection. '
-      'After detection starts, double tap anywhere on the screen to pause or resume detection. '
-      'At any time, press and hold anywhere on the screen to hear this tutorial again. '
-      'Note: This app is still under development. '
-      'The app detects a specific set of important on-ground indoor objects, not everything around you. '
-      'Distance estimates may not always be exact, and the app may be less accurate in very busy or chaotic environments. '
-      'Please continue using your cane, guide dog, or usual mobility tools while using this app.';
+      'Welcome to Vocal Vision, your navigation assistant. '
+      'Hold the phone upright with the camera pointing ahead. '
+      'The app announces nearby objects with their direction and estimated distance. '
+      'Phone vibrations indicate tilting—stronger vibration means worse tilt. '
+      'Double tap anywhere to pause or resume detection. '
+      'Swipe up or down to adjust speech speed. '
+      'This app is an assistant tool designed to complement your cane or guide dog, not replace them. '
+      'It may not be 100 percent accurate and only detects specific indoor objects. '
+      'Distance estimates may be imprecise in busy or chaotic environments. '
+      'Please continue using your mobility tools while using this app. '
+      'Press and hold anywhere to skip this tutorial and start. '
+      'At any time, pause the detection and then press and hold to hear this again.';
 
   @override
   void initState() {
@@ -648,8 +646,8 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
     _toggleSpeaking = false;
   }
 
-  // Long press handles tutorial actions without changing the existing
-  // double-tap pause/resume meaning.
+  // Long press is reserved for tutorial actions. It is ignored while live
+  // detection is actively running.
   Future<void> _handleLongPressAction() async {
     if (_toggleSpeaking) {
       return;
@@ -657,6 +655,10 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
 
     if (_appMode == AppMode.tutorial) {
       await _startDetectionFromTutorial();
+      return;
+    }
+
+    if (_appMode != AppMode.paused) {
       return;
     }
 
@@ -916,7 +918,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
       body: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onDoubleTap: _toggleDetection,
-        onLongPress: _handleLongPressAction,
+        onLongPress: _appMode == AppMode.detecting ? null : _handleLongPressAction,
         onVerticalDragStart: _handleSpeechRateDragStart,
         onVerticalDragUpdate: _handleSpeechRateDragUpdate,
         onVerticalDragEnd: _handleSpeechRateDragEnd,

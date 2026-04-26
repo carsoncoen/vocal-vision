@@ -72,7 +72,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
   String _pendingSpokenText = '';
 
   DateTime _lastSpoken = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _minSpeakInterval = Duration(seconds: 1);
+  static const Duration _minSpeakInterval = Duration(seconds: 0);
 
   // User-adjustable speech rate controls.
   double _speechRate = 0.5;
@@ -81,7 +81,7 @@ class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
   double _speechRateSwipeStartY = 0.0;
   double _speechRateSwipeLatestY = 0.0;
 
-  static const double _minSpeechRate = 0.2;
+  static const double _minSpeechRate = 0.5;
   static const double _maxSpeechRate = 1.2;
   static const double _speechRateStep = 0.2;
   static const double _speechRateSwipeDistanceThreshold = 60.0;
